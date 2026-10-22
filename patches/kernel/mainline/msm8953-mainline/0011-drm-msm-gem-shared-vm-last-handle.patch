@@ -1,0 +1,54 @@
+Subject: [PATCH] drm: msm: release shared GEM VM state on the last handle
+
+Release the allocator's shared mapping when its final handle closes, including clients that never created a GPU VM. Preserve other shared mappings and the VM_BIND ownership model instead of leaking display buffers.
+
+Origin: Local ThinkSmart View port
+Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Apply in filename order within this project.
+
+---
+diff --git a/drivers/gpu/drm/msm/msm_gem.c b/drivers/gpu/drm/msm/msm_gem.c
+--- a/drivers/gpu/drm/msm/msm_gem.c
++++ b/drivers/gpu/drm/msm/msm_gem.c
+@@ -52,7 +52,9 @@
+ static void msm_gem_close(struct drm_gem_object *obj, struct drm_file *file)
+ {
+ 	struct msm_context *ctx = file->driver_priv;
++	struct msm_drm_private *priv = obj->dev->dev_private;
++	struct drm_gpuvm *vm = ctx->vm;
+ 	struct drm_exec exec;
+ 	int refcount;
+ 
+ 	update_ctx_mem(file, -obj->size);
+@@ -62,10 +64,12 @@
+ 
+ 	/*
+-	 * If VM isn't created yet, nothing to cleanup.  And in fact calling
+-	 * put_iova_spaces() with vm=NULL would be bad, in that it will tear-
+-	 * down the mappings of shared buffers in other contexts.
++	 * The final handle can belong to an allocator with no GPU VM. On GPUs
++	 * sharing a pagetable, earlier handle closes leave the mapping alive
++	 * until the final handle closes. Complete that deferred teardown.
+ 	 */
+-	if (!ctx->vm)
++	if (!vm && !refcount && priv->gpu)
++		vm = priv->gpu->vm;
++	if (!vm)
+ 		return;
+ 
+ 	/*
+@@ -75,5 +79,5 @@
+-	if (msm_context_is_vmbind(ctx))
++	if (!to_msm_vm(vm)->managed)
+ 		return;
+ 
+-	if (!to_msm_vm(ctx->vm)->pid && refcount > 0)
++	if (!to_msm_vm(vm)->pid && refcount > 0)
+ 		return;
+@@ -87,4 +91,4 @@
+-	msm_gem_lock_vm_and_obj(&exec, obj, ctx->vm);
+-	put_iova_spaces(obj, ctx->vm, true, "close");
++	msm_gem_lock_vm_and_obj(&exec, obj, vm);
++	put_iova_spaces(obj, vm, true, "close");
+ 	drm_exec_fini(&exec);     /* drop locks */
+ }

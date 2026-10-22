@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MediaCodecs>
+    <Decoders>
+        <MediaCodec name="c2.v4l2.avc.decoder" type="video/avc">
+            <Limit name="size" min="64x64" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="16x16" />
+            <Limit name="blocks-per-second" range="1-244800" />
+            <Limit name="bitrate" range="1-12000000" />
+            <Limit name="concurrent-instances" max="1" />
+        </MediaCodec>
+        <MediaCodec name="c2.v4l2.hevc.decoder" type="video/hevc">
+            <Limit name="size" min="64x64" max="1920x1088" />
+            <Limit name="alignment" value="2x2" />
+            <Limit name="block-size" value="8x8" />
+            <Limit name="blocks-per-second" range="1-979200" />
+            <Limit name="bitrate" range="1-12000000" />
+            <Limit name="concurrent-instances" max="1" />
+        </MediaCodec>
+    </Decoders>
+</MediaCodecs>

@@ -1,0 +1,3 @@
+[submodule "upstream/xiaomi-mainline"]
+	path = upstream/xiaomi-mainline
+	url = https://github.com/LineageOS/android_device_xiaomi_mi89xx-mainline.git

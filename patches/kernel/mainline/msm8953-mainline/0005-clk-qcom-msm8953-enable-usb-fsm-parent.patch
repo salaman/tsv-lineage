@@ -1,0 +1,34 @@
+From: ThinkSmart local build <thinksmart@localhost>
+Subject: [PATCH] clk: qcom: gcc-msm8953: enable USB FSM parent for clock
+ operations
+
+The USB master branch needs the PCNOC USB AXI branch running for its FSM
+to complete a transition. The existing parent workaround orders normal
+consumer enable/disable operations, but unused-clock cleanup invokes
+the branch operation without enabling an otherwise-unused parent.
+This leaves the bootloader-enabled master branch unable to halt.
+
+Use CLK_OPS_PARENT_ENABLE so the common clock framework temporarily
+enables the FSM dependency during unused-clock cleanup and other clock
+operations. Preserve normal clock gating and the existing halt checks;
+do not mark the clock critical or ignore unused clocks.
+---
+ drivers/clk/qcom/gcc-msm8953.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Origin: Local ThinkSmart View port
+Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Apply in filename order within this project.
+
+---
+--- a/drivers/clk/qcom/gcc-msm8953.c
++++ b/drivers/clk/qcom/gcc-msm8953.c
+@@ -3651,7 +3651,7 @@ static struct clk_branch gcc_usb30_maste
+ 			},
+ 			.num_parents = 1,
+ 			.ops = &clk_branch2_ops,
+-			.flags = CLK_SET_RATE_PARENT,
++			.flags = CLK_SET_RATE_PARENT | CLK_OPS_PARENT_ENABLE,
+ 		}
+ 	}
+ };

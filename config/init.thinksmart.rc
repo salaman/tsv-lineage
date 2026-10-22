@@ -1,0 +1,13 @@
+import /vendor/etc/init/hw/init.mainline.qcom.rc
+
+on init
+    write /sys/block/zram0/comp_algorithm lz4
+
+on property:persist.sys.zram_enabled=1
+    swapon_all /vendor/etc/fstab.thinksmart
+
+on fs
+    mount_all /vendor/etc/fstab.thinksmart --early
+
+on late-fs
+    mount_all /vendor/etc/fstab.thinksmart --late

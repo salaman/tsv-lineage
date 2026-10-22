@@ -1,0 +1,173 @@
+Subject: [PATCH] iio: light: vcnl4200: use bounded on-demand proximity acquisition
+
+Register the ThinkSmart board sensor and use bounded active-force conversions with the emitter shut down between reads. Select the accepted four-pulse, 9T, 200 mA profile and preserve ALS operation without leaving continuous infrared emission enabled.
+
+Origin: Local ThinkSmart View port
+Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Apply in filename order within this project.
+
+---
+diff --git a/drivers/iio/light/vcnl4000.c b/drivers/iio/light/vcnl4000.c
+--- a/drivers/iio/light/vcnl4000.c
++++ b/drivers/iio/light/vcnl4000.c
+@@ -72,6 +72,9 @@
+ #define VCNL4040_INT_FLAGS	0x0b /* Interrupt register */
+ #define VCNL4200_INT_FLAGS	0x0d /* Interrupt register */
+ #define VCNL4200_DEV_ID		0x0e /* Device ID, slave address and version */
++#define VCNL4200_PS_DUTY		GENMASK(7, 6)
++#define VCNL4200_PS_AF		BIT(3)
++#define VCNL4200_PS_TRIG		BIT(2)
+ 
+ #define VCNL4040_DEV_ID		0x0c /* Device ID and version */
+ 
+@@ -342,7 +345,8 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	ret = vcnl4000_write_ps_enable(data, on);
++	ret = vcnl4000_write_ps_enable(data,
++			on && (data->id != VCNL4200 || data->ps_int));
+ 	if (ret < 0)
+ 		return ret;
+ 
+@@ -418,6 +422,13 @@
+ 		return ret;
+ 
+ 	regval = ret | VCNL4040_PS_CONF2_PS_HD;
++	if (data->id == VCNL4200) {
++		/* Keep the emitter off until a proximity conversion is requested. */
++		regval &= ~(VCNL4040_PS_CONF2_PS_IT | VCNL4040_PS_CONF2_PS_INT);
++		regval |= VCNL4040_PS_CONF1_PS_SHUTDOWN | VCNL4200_PS_DUTY |
++			FIELD_PREP(VCNL4040_PS_CONF2_PS_IT, 5);
++		data->vcnl4200_ps.sampling_rate = ms_to_ktime(400);
++	}
+ 	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF1, regval);
+ 	if (ret < 0)
+ 		return ret;
+@@ -427,7 +438,12 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
+-	regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
++	if (data->id == VCNL4200)
++		regval = (ret & ~(VCNL4040_PS_CONF3_MPS | VCNL4040_PS_MS_LED_I)) |
++			VCNL4200_PS_AF | FIELD_PREP(VCNL4040_PS_CONF3_MPS, 2) |
++			FIELD_PREP(VCNL4040_PS_MS_LED_I, 7);
++	else
++		regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
+ 	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3, regval);
+ 	if (ret < 0)
+ 		return ret;
+@@ -547,7 +563,58 @@
+ 
+ static int vcnl4200_measure_proximity(struct vcnl4000_data *data, int *val)
+ {
+-	return vcnl4200_measure(data, &data->vcnl4200_ps, val);
++	struct i2c_client *client = data->client;
++	int ret, conf1, conf3, shutdown;
++
++	if (data->id != VCNL4200)
++		return vcnl4200_measure(data, &data->vcnl4200_ps, val);
++
++	mutex_lock(&data->vcnl4000_lock);
++	if (data->ps_int) {
++		mutex_unlock(&data->vcnl4000_lock);
++		return vcnl4200_measure(data, &data->vcnl4200_ps, val);
++	}
++
++	conf1 = i2c_smbus_read_word_data(client, VCNL4200_PS_CONF1);
++	if (conf1 < 0) {
++		ret = conf1;
++		goto unlock;
++	}
++	conf3 = i2c_smbus_read_word_data(client, VCNL4200_PS_CONF3);
++	if (conf3 < 0) {
++		ret = conf3;
++		goto unlock;
++	}
++	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3,
++				      conf3 | VCNL4200_PS_AF);
++	if (ret < 0)
++		goto unlock;
++	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF1,
++				      conf1 & ~VCNL4040_PS_CONF1_PS_SHUTDOWN);
++	if (ret < 0)
++		goto poweroff;
++	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3,
++				      conf3 | VCNL4200_PS_AF | VCNL4200_PS_TRIG);
++	if (ret < 0)
++		goto poweroff;
++
++	/* Cover the longest supported integration time and eight-pulse setting. */
++	usleep_range(50000, 51000);
++	ret = i2c_smbus_read_word_data(client, VCNL4200_PS_DATA);
++poweroff:
++	shutdown = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF1,
++					   conf1 | VCNL4040_PS_CONF1_PS_SHUTDOWN);
++	if (shutdown < 0) {
++		dev_err(&client->dev, "Failed to shut down proximity: %d\n", shutdown);
++		ret = shutdown;
++	}
++	if (ret >= 0) {
++		*val = ret;
++		ret = 0;
++	}
++unlock:
++	mutex_unlock(&data->vcnl4000_lock);
++	return ret;
+ }
+ 
+ static int vcnl4010_read_proxy_samp_freq(struct vcnl4000_data *data, int *val,
+@@ -1530,9 +1597,24 @@
+ 
+ 		val = state ? (ret | mask) : (ret & ~mask);
+ 
+-		data->ps_int = FIELD_GET(VCNL4040_PS_CONF2_PS_INT, val);
++		if (data->id == VCNL4200) {
++			if (FIELD_GET(VCNL4040_PS_CONF2_PS_INT, val)) {
++				ret = i2c_smbus_read_word_data(data->client, VCNL4200_PS_CONF3);
++				if (ret < 0)
++					goto out;
++				ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF3,
++							      ret & ~VCNL4200_PS_AF);
++				if (ret < 0)
++					goto out;
++				val &= ~VCNL4040_PS_CONF1_PS_SHUTDOWN;
++			} else {
++				val |= VCNL4040_PS_CONF1_PS_SHUTDOWN;
++			}
++		}
+ 		ret = i2c_smbus_write_word_data(data->client, VCNL4200_PS_CONF1,
+ 						val);
++		if (!ret)
++			data->ps_int = FIELD_GET(VCNL4040_PS_CONF2_PS_INT, val);
+ 		break;
+ 	default:
+ 		break;
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -115,19 +115,15 @@
+ 			reg = <0x51>;
+ 
+ 			interrupt-parent = <&tlmm>;
+-			interrupts = <43 IRQ_TYPE_EDGE_RISING>;
++			interrupts = <43 IRQ_TYPE_EDGE_FALLING>;
+ 			interrupt-names = "INT1";
+ 
+ 			pinctrl-0 = <&alsp_int_default>;
+ 			pinctrl-names = "default";
+ 
+-			/*
+-			 * WARNING: Do not enable for now!
+-			 * There's a chance that this can burn out the sensor's IR LED.
+-			 * The sensor turns on the IR LED at high power (so that it
+-			 * gets noticeably warm) and never turns it off.
+-			 */
+-			status = "disabled";
++			/* Requires the driver with independent, on-demand proximity. */
++			proximity-near-level = <3>;
++			status = "okay";
+ 		};
+ 	};
+ 

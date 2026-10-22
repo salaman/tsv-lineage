@@ -1,0 +1,171 @@
+Subject: [PATCH] codec2: pass frame-based codec configuration to the decoder
+
+Preserve codec-specific data carried with frame-based input and submit it through the correct decoder setup path, without treating configuration-only input as a displayable output frame.
+
+Origin: Local ThinkSmart View port
+Base-commit: 16700e04214451441a1f7f5523b69848efb1f028
+Apply in filename order within this project.
+
+---
+diff --git a/components/DecodeComponent.cpp b/components/DecodeComponent.cpp
+index 00880d7..75a49db 100644
+--- a/components/DecodeComponent.cpp
++++ b/components/DecodeComponent.cpp
+@@ -11,6 +11,7 @@
+ #include <inttypes.h>
+ #include <linux/videodev2.h>
+ #include <stdint.h>
++#include <string.h>
+ 
+ #include <memory>
+ 
+@@ -273,6 +274,8 @@ void DecodeComponent::releaseTask() {
+ 
+     mWeakThisFactory.InvalidateWeakPtrs();
+     mDecoder = nullptr;
++    mPendingCSD.clear();
++    mCSDInputPool.reset();
+ }
+ 
+ c2_status_t DecodeComponent::setListener_vb(const std::shared_ptr<C2Component::Listener>& listener,
+@@ -392,7 +395,7 @@ void DecodeComponent::pumpPendingWorks() {
+         const bool isCSDWork = pendingWork->input.flags & C2FrameData::FLAG_CODEC_CONFIG;
+         const bool isEmptyWork = pendingWork->input.buffers.front() == nullptr;
+         const bool isEOSWork = pendingWork->input.flags & C2FrameData::FLAG_END_OF_STREAM;
+-        const C2Work* work = pendingWork.get();
++        C2Work* work = pendingWork.get();
+         ALOGV("Process C2Work bitstreamId=%d isCSDWork=%d, isEmptyWork=%d", bitstreamId, isCSDWork,
+               isEmptyWork);
+ 
+@@ -449,14 +452,77 @@ void DecodeComponent::processCSDWork(const int32_t bitstreamId, const C2Work* wo
+         }
+     }
+ 
++    if (needsCSDWithAccessUnit() && !mIsSecure &&
++        (mIntfImpl->getVideoCodec() == VideoCodec::H264 ||
++         mIntfImpl->getVideoCodec() == VideoCodec::HEVC)) {
++        C2ReadView view = linearBlock.map().get();
++        if (view.error() != C2_OK) {
++            ALOGE("Failed to map codec configuration: %d", view.error());
++            reportError(view.error());
++            return;
++        }
++        const size_t limit = mIntfImpl->getInputBufferSize();
++        if (mPendingCSD.size() > limit || linearBlock.size() > limit - mPendingCSD.size()) {
++            ALOGE("Codec configuration exceeds the maximum input size");
++            reportError(C2_BAD_VALUE);
++            return;
++        }
++        // Frame-based V4L2 decoders need parameter sets together with an access unit.
++        mPendingCSD.insert(mPendingCSD.end(), view.data(), view.data() + linearBlock.size());
++        onDecodeDone(bitstreamId, VideoDecoder::DecodeStatus::kOk);
++        return;
++    }
+     processWorkBuffer(bitstreamId, linearBlock);
+ }
+ 
+-void DecodeComponent::processWork(const int32_t bitstreamId, const C2Work* work) {
++void DecodeComponent::processWork(const int32_t bitstreamId, C2Work* work) {
+     // If input.buffers is not empty, the buffer should have meaningful content inside.
+     C2ConstLinearBlock linearBlock = work->input.buffers.front()->data().linearBlocks().front();
+     ALOG_ASSERT(linearBlock.size() > 0u, "Input buffer of work(%d) is empty.", bitstreamId);
+ 
++    if (!mPendingCSD.empty()) {
++        const size_t limit = mIntfImpl->getInputBufferSize();
++        if (mPendingCSD.size() > limit || linearBlock.size() > limit - mPendingCSD.size()) {
++            ALOGE("Codec configuration and frame exceed the maximum input size");
++            reportError(C2_BAD_VALUE);
++            return;
++        }
++        if (!mCSDInputPool) {
++            c2_status_t status = GetCodec2BlockPool(
++                    C2BlockPool::BASIC_LINEAR, shared_from_this(), &mCSDInputPool);
++            if (status != C2_OK) {
++                ALOGE("Failed to obtain the codec configuration input pool: %d", status);
++                reportError(status);
++                return;
++            }
++        }
++        const size_t size = mPendingCSD.size() + linearBlock.size();
++        std::shared_ptr<C2LinearBlock> combined;
++        c2_status_t status = mCSDInputPool->fetchLinearBlock(
++                limit, C2MemoryUsage{C2MemoryUsage::CPU_READ | C2MemoryUsage::CPU_WRITE}, &combined);
++        if (status != C2_OK) {
++            ALOGE("Failed to allocate codec configuration and frame: %d", status);
++            reportError(status);
++            return;
++        }
++        {
++            C2ReadView input = linearBlock.map().get();
++            C2WriteView output = combined->map().get();
++            if (input.error() != C2_OK || output.error() != C2_OK) {
++                status = input.error() != C2_OK ? input.error() : output.error();
++                ALOGE("Failed to map codec configuration and frame: %d", status);
++                reportError(status);
++                return;
++            }
++            memcpy(output.data(), mPendingCSD.data(), mPendingCSD.size());
++            memcpy(output.data() + mPendingCSD.size(), input.data(), linearBlock.size());
++        }
++        mPendingCSD.clear();
++        const C2ConstLinearBlock combinedBlock = combined->share(0, size, C2Fence());
++        work->input.buffers.front() = C2Buffer::CreateLinearBuffer(combinedBlock);
++        processWorkBuffer(bitstreamId, combinedBlock);
++        return;
++    }
+     processWorkBuffer(bitstreamId, linearBlock);
+ }
+ 
+@@ -701,6 +767,7 @@ void DecodeComponent::flushTask() {
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mDecoderTaskRunner->RunsTasksInCurrentSequence());
+ 
++    mPendingCSD.clear();
+     mDecoder->flush();
+     reportAbandonedWorks();
+ 
+diff --git a/components/include/v4l2_codec2/components/DecodeComponent.h b/components/include/v4l2_codec2/components/DecodeComponent.h
+index 27905c7..d15f83f 100644
+--- a/components/include/v4l2_codec2/components/DecodeComponent.h
++++ b/components/include/v4l2_codec2/components/DecodeComponent.h
+@@ -7,6 +7,7 @@
+ 
+ #include <atomic>
+ #include <memory>
++#include <vector>
+ 
+ #include <C2Component.h>
+ #include <C2ComponentFactory.h>
+@@ -66,7 +67,8 @@ protected:
+     void pumpPendingWorks();
+ 
+     void processCSDWork(const int32_t bitstreamId, const C2Work* work);
+-    void processWork(const int32_t bitstreamId, const C2Work* work);
++    virtual bool needsCSDWithAccessUnit() const { return false; }
++    void processWork(const int32_t bitstreamId, C2Work* work);
+     void processWorkBuffer(const int32_t bitstreamId, const C2ConstLinearBlock& linearBlock);
+ 
+     // Get the buffer pool.
+@@ -121,6 +123,9 @@ protected:
+     // reportAbandonedWorks() (drain is cancelled and works are abandoned).
+     bool mIsDraining = false;
+ 
++    std::vector<uint8_t> mPendingCSD;
++    std::shared_ptr<C2BlockPool> mCSDInputPool;
++
+     // The mutex lock to synchronize start/stop/reset/release calls.
+     std::mutex mStartStopLock;
+ 
+diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2DecodeComponent.h b/v4l2/include/v4l2_codec2/v4l2/V4L2DecodeComponent.h
+index dbb607f..3094367 100644
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2DecodeComponent.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2DecodeComponent.h
+@@ -19,6 +19,8 @@ public:
+     void startTask(c2_status_t* status, ::base::WaitableEvent* done) override;
+ 
+ private:
++    bool needsCSDWithAccessUnit() const override { return true; }
++
+     static std::atomic<int32_t> sConcurrentInstances;
+     static std::atomic<uint32_t> sNextDebugStreamId;
+ };

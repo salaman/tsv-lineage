@@ -1,0 +1,7 @@
+.cache
+.git
+firmware
+output
+private
+upstream/xiaomi-mainline
+**/__pycache__

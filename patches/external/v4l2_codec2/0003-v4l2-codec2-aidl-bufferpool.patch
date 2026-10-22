@@ -1,0 +1,51 @@
+Subject: [PATCH] codec2: accept AIDL buffer-pool blocks in VideoFramePool
+
+Recognize the AIDL buffer-pool allocation used by Android 16 instead of rejecting it as an unknown block. Keep the existing HIDL path available and add the corresponding build dependency.
+
+Origin: https://github.com/chaoscalm/gtaxlwifi-lineageos/blob/5e58effbe006f7876d07cbe89a4f071da19ab909/patches/external_v4l2_codec2/0008-VideoFramePool-Accept-AIDL-BufferPool-blocks.patch
+Adaptation: ThinkSmart View LineageOS 23.2
+Base-commit: 16700e04214451441a1f7f5523b69848efb1f028
+Apply in filename order within this project.
+
+---
+diff --git a/components/Android.bp b/components/Android.bp
+--- a/components/Android.bp
++++ b/components/Android.bp
+@@ -41,6 +41,7 @@
+         "libcutils",
+         "liblog",
+         "libsfplugin_ccodec_utils",
++        "libstagefright_aidl_bufferpool2",
+         "libstagefright_bufferqueue_helper",
+         "libstagefright_foundation",
+         "libui",
+diff --git a/components/VideoFramePool.cpp b/components/VideoFramePool.cpp
+--- a/components/VideoFramePool.cpp
++++ b/components/VideoFramePool.cpp
+@@ -11,6 +11,7 @@
+ #include <memory>
+ 
+ #include <C2BlockInternal.h>
+ #include <bufferpool/BufferPoolTypes.h>
++#include <bufferpool2/BufferPoolTypes.h>
+ 
+ #include <android/hardware_buffer.h>
+@@ -75,6 +76,18 @@
+         std::shared_ptr<_C2BlockPoolData> blockPoolData =
+                 _C2BlockFactory::GetGraphicBlockPoolData(block);
++        if (!blockPoolData) {
++            ALOGE("Obtained C2GraphicBlock lacks pool metadata.");
++            return std::nullopt;
++        }
++        if (blockPoolData->getType() == _C2BlockPoolData::TYPE_BUFFERPOOL2) {
++            std::shared_ptr<bufferpool2_BufferPoolData> bpData;
++            if (!_C2BlockFactory::GetBufferPoolData(blockPoolData, &bpData) || !bpData) {
++                ALOGE("AIDL BufferPoolData unavailable in block.");
++                return std::nullopt;
++            }
++            return bpData->mId;
++        }
+         if (blockPoolData->getType() != _C2BlockPoolData::TYPE_BUFFERPOOL) {
+             ALOGE("Obtained C2GraphicBlock is not bufferpool-backed.");
+             return std::nullopt;
+         }

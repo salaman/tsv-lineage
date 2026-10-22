@@ -1,0 +1,17 @@
+{
+  "Sensors": [
+    {"Name": "cpu0-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu1-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu2-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu3-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu4-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu5-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu6-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "cpu7-thermal", "Type": "CPU", "Throttling": [{"Type": "Hot", "Light": 80, "Shutdown": 100}]},
+    {"Name": "gpu-thermal", "Type": "GPU", "Throttling": [{"Type": "Hot", "Light": 70, "Shutdown": 90}]}
+  ],
+  "CoolingDevices": [
+    {"Name": "cpufreq-cpu0", "Type": "CPU"},
+    {"Name": "devfreq-1c00000.gpu", "Type": "GPU"}
+  ]
+}

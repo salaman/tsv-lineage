@@ -1,0 +1,35 @@
+Subject: [PATCH] drm/msm/dpu: discard completed frame flush state before video cleanup
+
+Video encoder disable leaves the last completed frame's software flush mask
+intact. Pipeline cleanup unstages the SSPPs, but includes those old SSPP
+bits in its teardown flush. On MSM8953 those bits can remain pending while
+their pipes are inactive and survive the following enable.
+
+A failure trace shows the final frame's 0x22858 flush completing,
+then teardown issuing 0x40022858 with no pipes staged. The next DMA-only
+enable completes its 0x40022840 mask and receives four vblanks, but the
+unrelated RGB 0x18 bits still block the whole-register completion waiter.
+
+Start the cleanup mask from scratch after the timing engine is stopped,
+as the writeback disable path already does. Cleanup builds its own mixer,
+interface and auxiliary-block flush mask. Leave the hardware completion
+predicate, genuine timeout handling and normal plane selection unchanged.
+
+Origin: Local ThinkSmart View port
+Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Apply in filename order within this project.
+
+---
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+@@ -677,6 +677,9 @@ static void dpu_encoder_phys_vid_disable(struct dpu_encoder_phys *phys_enc)
+ 		}
+ 	}
+ 
++	/* Build the teardown flush without the last completed frame's SSPPs. */
++	phys_enc->hw_ctl->ops.clear_pending_flush(phys_enc->hw_ctl);
++
+ 	dpu_encoder_helper_phys_cleanup(phys_enc);
+ 	phys_enc->enable_state = DPU_ENC_DISABLED;
+ }

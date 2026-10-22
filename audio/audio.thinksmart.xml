@@ -1,0 +1,60 @@
+<audiohal>
+    <mixer name="cd18781y">
+        <init>
+            <ctl name="Speaker Amp Master Playback Switch" val="0"/>
+            <ctl name="Speaker Amp Master Playback Volume" val="0"/>
+            <ctl name="QUAT_MI2S_RX Audio Mixer MultiMedia1" val="0"/>
+            <ctl name="MultiMedia2 Mixer TERT_MI2S_TX" val="0"/>
+            <ctl name="DEC1 MUX" val="ZERO"/>
+            <ctl name="DEC2 MUX" val="ZERO"/>
+            <ctl name="CIC1 MUX" val="DMIC"/>
+            <ctl name="CIC2 MUX" val="DMIC"/>
+            <!-- Ubuntu UCM reference: +31 dB on each digital microphone. -->
+            <ctl name="TX1 Digital Volume" val="115"/>
+            <ctl name="TX2 Digital Volume" val="115"/>
+        </init>
+    </mixer>
+    <device name="speaker">
+        <path name="on">
+            <ctl name="Speaker Amp Master Playback Switch" val="0"/>
+            <!-- Preserve Lenovo's DSP level; Android supplies user attenuation. -->
+            <ctl name="Speaker Amp Master Playback Volume" val="85"/>
+            <ctl name="Speaker Amp Master Playback Switch" val="1"/>
+        </path>
+        <path name="off">
+            <ctl name="Speaker Amp Master Playback Switch" val="0"/>
+            <ctl name="Speaker Amp Master Playback Volume" val="0"/>
+        </path>
+        <path name="pcm_on">
+            <ctl name="QUAT_MI2S_RX Audio Mixer MultiMedia1" val="1"/>
+        </path>
+        <path name="pcm_off">
+            <ctl name="QUAT_MI2S_RX Audio Mixer MultiMedia1" val="0"/>
+        </path>
+    </device>
+    <device name="mic">
+        <path name="on">
+            <ctl name="DEC1 MUX" val="DMIC1"/>
+            <ctl name="DEC2 MUX" val="DMIC2"/>
+        </path>
+        <path name="off">
+            <ctl name="DEC1 MUX" val="ZERO"/>
+            <ctl name="DEC2 MUX" val="ZERO"/>
+        </path>
+        <path name="capture_on">
+            <ctl name="MultiMedia2 Mixer TERT_MI2S_TX" val="1"/>
+        </path>
+        <path name="capture_off">
+            <ctl name="MultiMedia2 Mixer TERT_MI2S_TX" val="0"/>
+        </path>
+    </device>
+    <stream type="pcm" dir="out" card="0" device="0">
+        <enable path="pcm_on"/>
+        <disable path="pcm_off"/>
+    </stream>
+    <stream type="pcm" dir="in" card="0" device="1" rate="48000"
+            period_size="480" period_count="4">
+        <enable path="capture_on"/>
+        <disable path="capture_off"/>
+    </stream>
+</audiohal>

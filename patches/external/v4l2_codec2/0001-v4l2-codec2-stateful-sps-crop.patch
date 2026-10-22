@@ -1,0 +1,703 @@
+Subject: [PATCH] codec2: support stateful startup and SPS visible dimensions
+
+Use explicit unknown coded dimensions and defer CAPTURE setup until SOURCE_CHANGE when the driver requires parsed headers. Parse AVC/HEVC SPS display cropping separately from coded allocation dimensions, with bounds checks and parser regressions.
+
+Origin: Local ThinkSmart View port
+Base-commit: 16700e04214451441a1f7f5523b69848efb1f028
+Apply in filename order within this project.
+
+---
+diff --git a/v4l2/V4L2Decoder.cpp b/v4l2/V4L2Decoder.cpp
+--- a/v4l2/V4L2Decoder.cpp
++++ b/v4l2/V4L2Decoder.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include <v4l2_codec2/v4l2/V4L2Decoder.h>
+ 
++#include <errno.h>
+ #include <stdint.h>
+ 
+ #include <algorithm>
+@@ -202,7 +203,7 @@
+     }
+ 
+     // Setup the input format.
+-    auto format = mInputQueue->setFormat(inputPixelFormat, ui::Size(), inputBufferSize, 0);
++    auto format = mInputQueue->setFormat(inputPixelFormat, ui::Size(0, 0), inputBufferSize, 0);
+     if (!format) {
+         ALOGE("Failed to call IOCTL to set input format.");
+         return false;
+@@ -224,6 +225,17 @@
+     ATRACE_CALL();
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
++
++    struct v4l2_format format = {};
++    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++    if (mDevice->ioctl(VIDIOC_G_FMT, &format) != 0) {
++        if (errno == EINVAL) {
++            ALOGI("Deferring CAPTURE setup until the first SOURCE_CHANGE");
++            return true;
++        }
++        ALOGE("Failed to query initial CAPTURE format: %d", errno);
++        return false;
++    }
+ 
+     if (!setupMinimalOutputFormat()) {
+         ALOGE("Failed to set minimal resolution for initial output buffers");
+@@ -363,13 +375,50 @@
+         setState(State::Decoding);
+     }
+ 
++    std::optional<Rect> visibleRect;
++    if (!mIsSecure && (mCodec == VideoCodec::H264 || mCodec == VideoCodec::HEVC)) {
++        C2ReadView view = buffer->dmabuf.map().get();
++        if (view.error() != C2_OK || buffer->size > view.capacity()) {
++            ALOGE("Failed to map coded input for display metadata");
++            std::move(decodeCb).Run(VideoDecoder::DecodeStatus::kError);
++            onError();
++            return;
++        }
++        std::unique_ptr<NalParser> parser;
++        if (mCodec == VideoCodec::H264) {
++            parser = std::make_unique<H264NalParser>(view.data(), buffer->size);
++        } else {
++            parser = std::make_unique<HEVCNalParser>(view.data(), buffer->size);
++        }
++        bool hasFrame = false;
++        while (parser->locateNextNal()) {
++            if (parser->length() == 0) continue;
++            const uint8_t type = parser->type();
++            const uint8_t spsType = mCodec == VideoCodec::H264
++                    ? H264NalParser::kSPSType : HEVCNalParser::kSPSType;
++            if (type == spsType) {
++                Rect rect;
++                if (!parser->findVisibleRect(&rect)) {
++                    ALOGE("Invalid SPS display rectangle");
++                    std::move(decodeCb).Run(VideoDecoder::DecodeStatus::kError);
++                    onError();
++                    return;
++                }
++                mParsedVisibleRect = rect;
++            }
++            hasFrame |= mCodec == VideoCodec::H264 ? type >= 1 && type <= 5 : type <= 31;
++        }
++        if (hasFrame) visibleRect = mParsedVisibleRect;
++    }
+     // To determine if the DRC is pending, the access to the frame data is
+     // required. It's not possible to access the frame directly for the secure
+     // playback, so this check must be skipped. b/279834186
+-    if (!mIsSecure && mInitialEosBuffer && !mPendingDRC)
++    if (!mIsSecure && !mPendingDRC)
+         mPendingDRC = waitForDRC(buffer->dmabuf, mCodec);
+ 
+-    mDecodeRequests.push(DecodeRequest(std::move(buffer), std::move(decodeCb)));
++    DecodeRequest request(std::move(buffer), std::move(decodeCb));
++    request.visibleRect = visibleRect;
++    mDecodeRequests.push(std::move(request));
+     pumpDecodeRequest();
+ }
+ 
+@@ -425,11 +474,15 @@
+                 return;
+             }
+ 
++            // Header-only draining must not depend on a pre-header CAPTURE buffer.
++            const bool noStream = !mPendingDRC &&
++                    (mInitialEosBuffer || (!mIsSecure && !mOutputQueue->isStreaming()));
++
+             // If output queue is not streaming, then device is unable to notify
+             // whenever draining is finished. (EOS frame cannot be dequeued).
+             // This is likely to happen in the event of that the first resolution
+             // change event wasn't dequeued before the drain request.
+-            if (!mOutputQueue->isStreaming()) {
++            if (!mOutputQueue->isStreaming() && !noStream) {
+                 ALOGV("Wait for output queue to start streaming");
+                 return;
+             }
+@@ -445,7 +498,7 @@
+             // may trigger config from host side.
+             // Drain can only be finished if we are sure there was no stream = no
+             // single frame in the stack.
+-            if (mInitialEosBuffer && !mPendingDRC) {
++            if (noStream) {
+                 ALOGV("Terminate drain, because there was no stream");
+                 mTaskRunner->PostTask(FROM_HERE, ::base::BindOnce(std::move(request.decodeCb),
+                                                                   VideoDecoder::DecodeStatus::kOk));
+@@ -528,6 +581,9 @@
+         }
+ 
+         mPendingDecodeCbs.insert(std::make_pair(bitstreamId, std::move(request.decodeCb)));
++        if (request.visibleRect) {
++            mBitstreamVisibleRects[bitstreamId] = *request.visibleRect;
++        }
+     }
+ }
+ 
+@@ -536,6 +592,7 @@
+     ALOGV("%s()", __func__);
+     ALOG_ASSERT(mTaskRunner->RunsTasksInCurrentSequence());
+ 
++    mBitstreamVisibleRects.clear();
+     if (mState == State::Idle) {
+         ALOGV("Nothing need to flush, ignore.");
+         return;
+@@ -673,7 +730,18 @@
+         if (bytesUsed > 0) {
+             ALOGV("Send output frame(bitstreamId=%d) to client", bitstreamId);
+             frame->setBitstreamId(bitstreamId);
+-            frame->setVisibleRect(mVisibleRect);
++            Rect visibleRect = mVisibleRect;
++            auto crop = mBitstreamVisibleRects.find(bitstreamId);
++            if (crop != mBitstreamVisibleRects.end()) {
++                if (!contains(Rect(mCodedSize.width, mCodedSize.height), crop->second)) {
++                    ALOGE("SPS display rectangle exceeds the decoded allocation");
++                    onError();
++                    return;
++                }
++                visibleRect = crop->second;
++                mBitstreamVisibleRects.erase(crop);
++            }
++            frame->setVisibleRect(visibleRect);
+             mOutputCb.Run(std::move(frame));
+         } else {
+             // Workaround(b/168750131): If the buffer is not enqueued before the next drain is done,
+@@ -693,6 +761,7 @@
+ 
+         if (mDrainCb && isLast) {
+             ALOGV("All buffers are drained.");
++            mBitstreamVisibleRects.clear();
+             sendV4L2DecoderCmd(true);
+             std::move(mDrainCb).Run(VideoDecoder::DecodeStatus::kOk);
+             setState(State::Idle);
+diff --git a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
+--- a/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
++++ b/v4l2/include/v4l2_codec2/v4l2/V4L2Decoder.h
+@@ -67,6 +67,7 @@
+ 
+         std::unique_ptr<ConstBitstreamBuffer> buffer;  // nullptr means Drain
+         DecodeCB decodeCb;
++        std::optional<Rect> visibleRect;
+     };
+ 
+     V4L2Decoder(uint32_t debugStreamId, scoped_refptr<::base::SequencedTaskRunner> taskRunner);
+@@ -115,6 +116,8 @@
+ 
+     std::queue<DecodeRequest> mDecodeRequests;
+     std::map<int32_t, DecodeCB> mPendingDecodeCbs;
++    std::optional<Rect> mParsedVisibleRect;
++    std::map<int32_t, Rect> mBitstreamVisibleRects;
+     // Marks that we need to wait for DRC before drain can complete.
+     bool mPendingDRC = false;
+     // Holds information about secure playback, which won't allow decoder to
+diff --git a/common/H264NalParser.cpp b/common/H264NalParser.cpp
+--- a/common/H264NalParser.cpp
++++ b/common/H264NalParser.cpp
+@@ -97,37 +97,26 @@
+     return *mCurrNalDataPos & kNALTypeMask;
+ }
+ 
+-bool H264NalParser::findCodedColorAspects(ColorAspects* colorAspects) {
+-    ALOG_ASSERT(colorAspects);
+-    ALOG_ASSERT(type() == kSPSType);
+-
+-    // Unfortunately we can't directly jump to the Video Usability Information (VUI) parameters that
+-    // contain the color aspects. We need to parse the entire SPS header up until the values we
+-    // need.
+-
+-    // Skip first byte containing type.
+-    NALBitReader br(mCurrNalDataPos + 1, length() - 1);
+-
++bool H264NalParser::parseSPSHeader(NALBitReader& br, Rect* visibleRect) {
+     uint32_t unused;
+     uint32_t profileIDC;
+     if (!br.getBitsGraceful(8, &profileIDC)) return false;  // profile_idc
+-    br.skipBits(16);        // constraint flags + reserved bits + level_idc
+-    parseUE(&br, &unused);  // seq_parameter_set_id
++    if (!br.skipBits(16) || !parseUE(&br, &unused) || unused > 31) return false;
++    uint32_t chromaFormatIDC = 1;
++    uint32_t separateColourPlaneFlag = 0;
+ 
+     if (profileIDC == kProfileIDCHigh || profileIDC == kProfileIDHigh10 ||
+         profileIDC == kProfileIDHigh422 || profileIDC == kProfileIDHigh444Predictive ||
+         profileIDC == kProfileIDCAVLC444 || profileIDC == kProfileIDScalableBaseline ||
+         profileIDC == kProfileIDScalableHigh || profileIDC == kProfileIDSMultiviewHigh ||
+         profileIDC == kProfileIDStereoHigh) {
+-        uint32_t chromaFormatIDC;
+-        if (!parseUE(&br, &chromaFormatIDC)) return false;
++        if (!parseUE(&br, &chromaFormatIDC) || chromaFormatIDC > 3) return false;
+         if (chromaFormatIDC == kYUV444Idc) {  // chroma_format_idc
+-            br.skipBits(1);                   // separate_colour_plane_flag
+-        }
+-
+-        parseUE(&br, &unused);  // bit_depth_luma_minus8
+-        parseUE(&br, &unused);  // bit_depth_chroma_minus8
+-        br.skipBits(1);         // lossless_qpprime_y_zero_flag
++            if (!br.getBitsGraceful(1, &separateColourPlaneFlag)) return false;
++        }
++
++        if (!parseUE(&br, &unused) || !parseUE(&br, &unused) || !br.skipBits(1))
++            return false;
+ 
+         uint32_t seqScalingMatrixPresentFlag;
+         if (!br.getBitsGraceful(1, &seqScalingMatrixPresentFlag))
+@@ -138,43 +127,62 @@
+         }
+     }
+ 
+-    parseUE(&br, &unused);  // log2_max_frame_num_minus4
++    if (!parseUE(&br, &unused)) return false;  // log2_max_frame_num_minus4
+     uint32_t pictureOrderCountType;
+-    if (!parseUE(&br, &pictureOrderCountType)) return false;  // pic_order_cnt_type
++    if (!parseUE(&br, &pictureOrderCountType) || pictureOrderCountType > 2) return false;
+     if (pictureOrderCountType == 0) {
+-        parseUE(&br, &unused);  // log2_max_pic_order_cnt_lsb_minus4
++        if (!parseUE(&br, &unused)) return false;  // log2_max_pic_order_cnt_lsb_minus4
+     } else if (pictureOrderCountType == 1) {
+-        br.skipBits(1);  // delta_pic_order_always_zero_flag
++        if (!br.skipBits(1)) return false;  // delta_pic_order_always_zero_flag
+         int32_t unused_i;
+-        parseSE(&br, &unused_i);  // offset_for_non_ref_pic
+-        parseSE(&br, &unused_i);  // offset_for_top_to_bottom_field
++        if (!parseSE(&br, &unused_i) || !parseSE(&br, &unused_i)) return false;
+         uint32_t numReferenceFrames;
+-        if (!parseUE(&br, &numReferenceFrames))
++        if (!parseUE(&br, &numReferenceFrames) || numReferenceFrames > 255)
+             return false;  // num_ref_frames_in_pic_order_cnt_cycle
+         for (uint32_t i = 0; i < numReferenceFrames; ++i) {
+-            parseUE(&br, &unused);  // offset_for_ref_frame
+-        }
+-    }
+-
+-    parseUE(&br, &unused);  // num_ref_frames
+-    br.skipBits(1);         // gaps_in_frame_num_value_allowed_flag
+-    parseUE(&br, &unused);  // pic_width_in_mbs_minus1
+-    parseUE(&br, &unused);  // pic_height_in_map_units_minus1
++            if (!parseSE(&br, &unused_i)) return false;  // offset_for_ref_frame
++        }
++    }
++
++    uint32_t widthInMbsMinus1, heightInMapUnitsMinus1;
++    if (!parseUE(&br, &unused) || !br.skipBits(1) ||
++        !parseUE(&br, &widthInMbsMinus1) || !parseUE(&br, &heightInMapUnitsMinus1))
++        return false;
+     uint32_t frameMbsOnlyFlag;
+     if (!br.getBitsGraceful(1, &frameMbsOnlyFlag)) return false;  // frame_mbs_only_flag
+     if (!frameMbsOnlyFlag) {
+-        br.skipBits(1);  // mb_adaptive_frame_field_flag
+-    }
+-    br.skipBits(1);  // direct_8x8_inference_flag
++        if (!br.skipBits(1)) return false;  // mb_adaptive_frame_field_flag
++    }
++    if (!br.skipBits(1)) return false;  // direct_8x8_inference_flag
+ 
+     uint32_t frameCroppingFlag;
+     if (!br.getBitsGraceful(1, &frameCroppingFlag)) return false;  // frame_cropping_flag
+-    if (frameCroppingFlag) {
+-        parseUE(&br, &unused);  // frame_cropping_rect_left_offset
+-        parseUE(&br, &unused);  // frame_cropping_rect_right_offset
+-        parseUE(&br, &unused);  // frame_cropping_rect_top_offset
+-        parseUE(&br, &unused);  // frame_cropping_rect_bottom_offset
+-    }
++    uint32_t left = 0, right = 0, top = 0, bottom = 0;
++    if (frameCroppingFlag &&
++        (!parseUE(&br, &left) || !parseUE(&br, &right) ||
++         !parseUE(&br, &top) || !parseUE(&br, &bottom))) {
++        return false;
++    }
++    const uint32_t chromaArrayType = separateColourPlaneFlag ? 0 : chromaFormatIDC;
++    const uint32_t unitX = chromaArrayType == 1 || chromaArrayType == 2 ? 2 : 1;
++    const uint32_t unitY = (chromaArrayType == 1 ? 2 : 1) * (2 - frameMbsOnlyFlag);
++    return makeVisibleRect((uint64_t(widthInMbsMinus1) + 1) * 16,
++                           (uint64_t(heightInMapUnitsMinus1) + 1) * 16 * (2 - frameMbsOnlyFlag),
++                           unitX, unitY, left, right, top, bottom, visibleRect);
++}
++
++bool H264NalParser::findVisibleRect(Rect* visibleRect) {
++    if (!visibleRect || length() <= 1 || type() != kSPSType) return false;
++    NALBitReader br(data() + 1, length() - 1);
++    return parseSPSHeader(br, visibleRect);
++}
++
++bool H264NalParser::findCodedColorAspects(ColorAspects* colorAspects) {
++    ALOG_ASSERT(colorAspects);
++    ALOG_ASSERT(type() == kSPSType);
++    if (length() <= 1) return false;
++    NALBitReader br(data() + 1, length() - 1);
++    if (!parseSPSHeader(br, nullptr)) return false;
+ 
+     uint32_t vuiParametersPresentFlag;
+     if (!br.getBitsGraceful(1, &vuiParametersPresentFlag))
+diff --git a/common/HEVCNalParser.cpp b/common/HEVCNalParser.cpp
+--- a/common/HEVCNalParser.cpp
++++ b/common/HEVCNalParser.cpp
+@@ -218,40 +218,50 @@
+     return (*mCurrNalDataPos & kNALTypeMask) >> 1;
+ }
+ 
++bool HEVCNalParser::parseSPSHeader(NALBitReader& br, Rect* visibleRect, uint32_t* sublayers) {
++    if (!br.skipBits(4)) return false;  // sps_video_parameter_set_id
++    uint32_t spsMaxSublayersMinus1;
++    if (!br.getBitsGraceful(3, &spsMaxSublayersMinus1)) return false;
++    if (!br.skipBits(1)) return false;  // sps_temporal_id_nesting_flag
++
++    if (!skipProfileTierLevel(&br, spsMaxSublayersMinus1)) return false;
++    if (sublayers) *sublayers = spsMaxSublayersMinus1;
++
++    uint32_t unused;
++    if (!parseUE(&br, &unused) || unused > 15) return false;  // sps_seq_parameter_set_id
++    uint32_t chromaFormatIdc;
++    if (!parseUE(&br, &chromaFormatIdc) || chromaFormatIdc > 3) return false;
++    if (chromaFormatIdc == 3 && !br.skipBits(1)) return false;
++    uint32_t width, height;
++    if (!parseUE(&br, &width) || !parseUE(&br, &height)) return false;
++
++    uint32_t conformanceWindowFlag;
++    if (!br.getBitsGraceful(1, &conformanceWindowFlag)) return false;
++    uint32_t left = 0, right = 0, top = 0, bottom = 0;
++    if (conformanceWindowFlag &&
++        (!parseUE(&br, &left) || !parseUE(&br, &right) ||
++         !parseUE(&br, &top) || !parseUE(&br, &bottom))) {
++        return false;
++    }
++    const uint32_t unitX = chromaFormatIdc == 1 || chromaFormatIdc == 2 ? 2 : 1;
++    const uint32_t unitY = chromaFormatIdc == 1 ? 2 : 1;
++    return makeVisibleRect(width, height, unitX, unitY, left, right, top, bottom, visibleRect);
++}
++
++bool HEVCNalParser::findVisibleRect(Rect* visibleRect) {
++    if (!visibleRect || length() <= 2 || type() != kSPSType) return false;
++    NALBitReader br(data() + 2, length() - 2);
++    return parseSPSHeader(br, visibleRect);
++}
++
+ bool HEVCNalParser::findCodedColorAspects(ColorAspects* colorAspects) {
+     ALOG_ASSERT(colorAspects);
+     ALOG_ASSERT(type() == kSPSType);
+-
+-    // Unfortunately we can't directly jump to the Video Usability Information (VUI) parameters that
+-    // contain the color aspects. We need to parse the entire SPS header up until the values we
+-    // need.
+-    // Skip first 2 bytes for the NALU header.
+     if (length() <= 2) return false;
+-    NALBitReader br(mCurrNalDataPos + 2, length() - 2);
+-
+-    br.skipBits(4);  // sps_video_parameter_set_id
++    NALBitReader br(data() + 2, length() - 2);
+     uint32_t spsMaxSublayersMinus1;
+-    if (!br.getBitsGraceful(3, &spsMaxSublayersMinus1)) return false;
+-    br.skipBits(1);  // sps_temporal_id_nesting_flag
+-
+-    if (!skipProfileTierLevel(&br, spsMaxSublayersMinus1)) return false;
+-
++    if (!parseSPSHeader(br, nullptr, &spsMaxSublayersMinus1)) return false;
+     uint32_t unused;
+-    parseUE(&br, &unused);  // sps_seq_parameter_set_id
+-    uint32_t chromaFormatIdc;
+-    if (!parseUE(&br, &chromaFormatIdc)) return false;
+-    if (chromaFormatIdc == 3) br.skipBits(1);  // separate_colour_plane_flag
+-    parseUE(&br, &unused);                     // pic_width_in_luma_samples
+-    parseUE(&br, &unused);                     // pic_height_in_luma_samples
+-
+-    uint32_t conformanceWindowFlag;
+-    if (!br.getBitsGraceful(1, &conformanceWindowFlag)) return false;
+-    if (conformanceWindowFlag) {
+-        parseUE(&br, &unused);  // conf_win_left_offset
+-        parseUE(&br, &unused);  // conf_win_right_offset
+-        parseUE(&br, &unused);  // conf_win_top_offset
+-        parseUE(&br, &unused);  // conf_win_bottom_offset
+-    }
+     parseUE(&br, &unused);  // bit_depth_luma_minus8
+     parseUE(&br, &unused);  // bit_depth_chroma_minus8
+     uint32_t log2MaxPicOrderCntLsbMinus4;
+diff --git a/common/NalParser.cpp b/common/NalParser.cpp
+--- a/common/NalParser.cpp
++++ b/common/NalParser.cpp
+@@ -6,6 +6,7 @@
+ #define LOG_TAG "NalParser"
+ 
+ #include <algorithm>
++#include <limits>
+ 
+ #include <v4l2_codec2/common/NalParser.h>
+ 
+@@ -48,10 +49,31 @@
+     if (!br->getBitsGraceful(1, &bit)) return false;
+     while (bit == 0) {
+         ++numZeroes;
++        if (numZeroes >= 32) return false;
+         if (!br->getBitsGraceful(1, &bit)) return false;
+     }
+     if (!br->getBitsGraceful(numZeroes, val)) return false;
+     *val += (1u << numZeroes) - 1;
++    return true;
++}
++
++bool NalParser::makeVisibleRect(uint64_t width, uint64_t height, uint32_t unitX, uint32_t unitY,
++                               uint32_t left, uint32_t right, uint32_t top, uint32_t bottom,
++                               Rect* visibleRect) {
++    const uint64_t x = uint64_t(left) * unitX;
++    const uint64_t y = uint64_t(top) * unitY;
++    const uint64_t endX = uint64_t(right) * unitX;
++    const uint64_t endY = uint64_t(bottom) * unitY;
++    if (width > std::numeric_limits<int32_t>::max() ||
++        height > std::numeric_limits<int32_t>::max() ||
++        x + endX >= width || y + endY >= height) {
++        return false;
++    }
++    if (visibleRect) {
++        *visibleRect = Rect(static_cast<int32_t>(x), static_cast<int32_t>(y),
++                            static_cast<int32_t>(width - endX),
++                            static_cast<int32_t>(height - endY));
++    }
+     return true;
+ }
+ 
+diff --git a/common/include/v4l2_codec2/common/H264NalParser.h b/common/include/v4l2_codec2/common/H264NalParser.h
+--- a/common/include/v4l2_codec2/common/H264NalParser.h
++++ b/common/include/v4l2_codec2/common/H264NalParser.h
+@@ -33,6 +33,10 @@
+ 
+     // Find the H.264 video's color aspects in the current SPS NAL.
+     bool findCodedColorAspects(ColorAspects* colorAspects) override;
++    bool findVisibleRect(Rect* visibleRect) override;
++
++private:
++    bool parseSPSHeader(NALBitReader& br, Rect* visibleRect);
+ };
+ 
+ }  // namespace android
+diff --git a/common/include/v4l2_codec2/common/HEVCNalParser.h b/common/include/v4l2_codec2/common/HEVCNalParser.h
+--- a/common/include/v4l2_codec2/common/HEVCNalParser.h
++++ b/common/include/v4l2_codec2/common/HEVCNalParser.h
+@@ -30,6 +30,10 @@
+ 
+     // Find the HEVC video's color aspects in the current SPS NAL.
+     bool findCodedColorAspects(ColorAspects* colorAspects) override;
++    bool findVisibleRect(Rect* visibleRect) override;
++
++private:
++    bool parseSPSHeader(NALBitReader& br, Rect* visibleRect, uint32_t* sublayers = nullptr);
+ };
+ 
+ }  // namespace android
+diff --git a/common/include/v4l2_codec2/common/NalParser.h b/common/include/v4l2_codec2/common/NalParser.h
+--- a/common/include/v4l2_codec2/common/NalParser.h
++++ b/common/include/v4l2_codec2/common/NalParser.h
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ 
+ #include <media/stagefright/foundation/ABitReader.h>
++#include <ui/Rect.h>
+ 
+ namespace android {
+ 
+@@ -48,6 +49,7 @@
+ 
+     // Find the video's color aspects in the current SPS NAL.
+     virtual bool findCodedColorAspects(ColorAspects* colorAspects) = 0;
++    virtual bool findVisibleRect(Rect* visibleRect) = 0;
+ 
+     // Read unsigned int encoded with exponential-golomb.
+     static bool parseUE(ABitReader* br, uint32_t* val);
+@@ -56,6 +58,9 @@
+     static bool parseSE(ABitReader* br, int32_t* val);
+ 
+ protected:
++    static bool makeVisibleRect(uint64_t width, uint64_t height, uint32_t unitX, uint32_t unitY,
++                                uint32_t left, uint32_t right, uint32_t top, uint32_t bottom,
++                                Rect* visibleRect);
+     const uint8_t* findNextStartCodePos() const;
+ 
+     // The byte pattern for the start of a NAL unit.
+diff --git a/common/tests/Android.bp b/common/tests/Android.bp
+new file mode 100644
+--- /dev/null
++++ b/common/tests/Android.bp
+@@ -0,0 +1,11 @@
++cc_test {
++    name: "v4l2_codec2_sps_test",
++    vendor: true,
++    srcs: ["SpsTest.cpp"],
++    shared_libs: [
++        "libstagefright_foundation",
++        "libui",
++        "libv4l2_codec2_common",
++    ],
++    cflags: ["-Wall", "-Werror"],
++}
+diff --git a/common/tests/SpsTest.cpp b/common/tests/SpsTest.cpp
+new file mode 100644
+--- /dev/null
++++ b/common/tests/SpsTest.cpp
+@@ -0,0 +1,170 @@
++#include <gtest/gtest.h>
++#include <v4l2_codec2/common/H264NalParser.h>
++#include <v4l2_codec2/common/HEVCNalParser.h>
++
++#include <array>
++#include <limits>
++#include <vector>
++
++namespace android {
++namespace {
++
++class Bits {
++public:
++    void put(uint32_t value, unsigned count = 1) {
++        for (unsigned bit = count; bit > 0; --bit) {
++            if (mCount % 8 == 0) mData.push_back(0);
++            mData.back() |= ((value >> (bit - 1)) & 1) << (7 - mCount % 8);
++            ++mCount;
++        }
++    }
++
++    void ue(uint32_t value) {
++        const uint64_t code = uint64_t(value) + 1;
++        unsigned count = 0;
++        for (uint64_t n = code; n; n >>= 1) ++count;
++        for (unsigned i = 1; i < count; ++i) put(0);
++        for (unsigned bit = count; bit > 0; --bit) put((code >> (bit - 1)) & 1);
++    }
++
++    std::vector<uint8_t> nal(bool hevc) const {
++        std::vector<uint8_t> result = {0, 0, 0, 1};
++        result.push_back(hevc ? 0x42 : 0x67);
++        if (hevc) result.push_back(1);
++        unsigned zeros = 0;
++        for (uint8_t byte : mData) {
++            if (zeros == 2 && byte <= 3) {
++                result.push_back(3);
++                zeros = 0;
++            }
++            result.push_back(byte);
++            zeros = byte == 0 ? zeros + 1 : 0;
++        }
++        return result;
++    }
++
++private:
++    std::vector<uint8_t> mData;
++    unsigned mCount = 0;
++};
++
++std::vector<uint8_t> h264(uint32_t widthMbs, uint32_t heightUnits,
++                          std::array<uint32_t, 4> crop = {}, uint32_t chroma = 1,
++                          bool progressive = true, bool separate = false) {
++    Bits b;
++    b.put(chroma == 1 && !separate ? 66 : 100, 8);
++    b.put(0, 16);
++    b.ue(0);
++    if (chroma != 1 || separate) {
++        b.ue(chroma);
++        if (chroma == 3) b.put(separate);
++        b.ue(0);
++        b.ue(0);
++        b.put(0);
++        b.put(0);
++    }
++    b.ue(0);
++    b.ue(0);
++    b.ue(0);
++    b.ue(1);
++    b.put(0);
++    b.ue(widthMbs - 1);
++    b.ue(heightUnits - 1);
++    b.put(progressive);
++    if (!progressive) b.put(0);
++    b.put(1);
++    b.put(1);
++    for (auto value : crop) b.ue(value);
++    b.put(0);
++    return b.nal(false);
++}
++
++std::vector<uint8_t> hevc(uint32_t width, uint32_t height,
++                          std::array<uint32_t, 4> crop = {}, uint32_t chroma = 1) {
++    Bits b;
++    b.put(1, 8);
++    for (unsigned i = 0; i < 3; ++i) b.put(0, 32);
++    b.ue(0);
++    b.ue(chroma);
++    if (chroma == 3) b.put(0);
++    b.ue(width);
++    b.ue(height);
++    b.put(1);
++    for (auto value : crop) b.ue(value);
++    return b.nal(true);
++}
++
++template <typename Parser>
++bool parse(const std::vector<uint8_t>& data, Rect* rect) {
++    if (data.empty()) return false;
++    Parser parser(data.data(), data.size());
++    return parser.locateSPS() && parser.findVisibleRect(rect);
++}
++
++TEST(SpsCrop, AvcVisibleAndAllocationAreDifferent) {
++    Rect rect;
++    ASSERT_TRUE(parse<H264NalParser>(h264(40, 23, {0, 0, 0, 4}), &rect));
++    EXPECT_EQ(rect, Rect(0, 0, 640, 360));
++    ASSERT_TRUE(parse<H264NalParser>(h264(120, 68, {0, 0, 0, 4}), &rect));
++    EXPECT_EQ(rect, Rect(0, 0, 1920, 1080));
++}
++
++TEST(SpsCrop, AvcChromaOffsetsAndInterlacing) {
++    Rect rect;
++    ASSERT_TRUE(parse<H264NalParser>(h264(40, 23, {1, 2, 3, 4}), &rect));
++    EXPECT_EQ(rect, Rect(2, 6, 636, 360));
++    ASSERT_TRUE(parse<H264NalParser>(h264(40, 23, {1, 2, 3, 4}, 2), &rect));
++    EXPECT_EQ(rect, Rect(2, 3, 636, 364));
++    ASSERT_TRUE(parse<H264NalParser>(h264(40, 23, {1, 2, 3, 4}, 3, true, true), &rect));
++    EXPECT_EQ(rect, Rect(1, 3, 638, 364));
++    ASSERT_TRUE(parse<H264NalParser>(h264(45, 18, {0, 0, 0, 2}, 1, false), &rect));
++    EXPECT_EQ(rect, Rect(0, 0, 720, 568));
++}
++
++TEST(SpsCrop, HevcConformanceWindowAndChroma) {
++    Rect rect;
++    ASSERT_TRUE(parse<HEVCNalParser>(hevc(640, 368, {0, 0, 0, 4}), &rect));
++    EXPECT_EQ(rect, Rect(0, 0, 640, 360));
++    ASSERT_TRUE(parse<HEVCNalParser>(hevc(1920, 1088, {0, 0, 0, 4}), &rect));
++    EXPECT_EQ(rect, Rect(0, 0, 1920, 1080));
++    ASSERT_TRUE(parse<HEVCNalParser>(hevc(640, 368, {1, 2, 3, 4}, 2), &rect));
++    EXPECT_EQ(rect, Rect(2, 3, 636, 364));
++    ASSERT_TRUE(parse<HEVCNalParser>(hevc(640, 368, {1, 2, 3, 4}, 3), &rect));
++    EXPECT_EQ(rect, Rect(1, 3, 638, 364));
++}
++
++TEST(SpsCrop, UncroppedStreams) {
++    Rect rect;
++    ASSERT_TRUE(parse<H264NalParser>(h264(40, 30), &rect));
++    EXPECT_EQ(rect, Rect(640, 480));
++    ASSERT_TRUE(parse<HEVCNalParser>(hevc(640, 480), &rect));
++    EXPECT_EQ(rect, Rect(640, 480));
++}
++
++TEST(SpsCrop, InvalidCropAndOverflowLeaveResultUnchanged) {
++    const Rect initial(320, 240);
++    Rect rect = initial;
++    EXPECT_FALSE(parse<H264NalParser>(h264(40, 23, {320, 0, 0, 0}), &rect));
++    EXPECT_FALSE(parse<H264NalParser>(h264(0x10000000, 23), &rect));
++    EXPECT_FALSE(parse<HEVCNalParser>(hevc(0, 368), &rect));
++    EXPECT_FALSE(parse<HEVCNalParser>(hevc(640, 368, {0, 0, 0, 184}), &rect));
++    EXPECT_FALSE(parse<HEVCNalParser>(hevc(std::numeric_limits<uint32_t>::max(), 368), &rect));
++    EXPECT_EQ(rect, initial);
++}
++
++TEST(SpsCrop, TruncatedHeadersAreRejected) {
++    Rect rect;
++    auto avc = h264(40, 23, {1, 2, 3, 4});
++    auto h265 = hevc(640, 368, {1, 2, 3, 4});
++    for (size_t size = 0; size + 1 < avc.size(); ++size) {
++        EXPECT_FALSE(parse<H264NalParser>(
++                std::vector<uint8_t>(avc.begin(), avc.begin() + size), &rect));
++    }
++    for (size_t size = 0; size + 1 < h265.size(); ++size) {
++        EXPECT_FALSE(parse<HEVCNalParser>(
++                std::vector<uint8_t>(h265.begin(), h265.begin() + size), &rect));
++    }
++}
++
++}  // namespace
++}  // namespace android

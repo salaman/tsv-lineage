@@ -1,0 +1,21 @@
+Subject: [PATCH] arm64: dts: qcom: expose ThinkSmart amplifier mute GPIO
+
+Use the standard plural GPIO property consumed by the codec driver so it
+can control the connected mute line. Preserve the board's existing polarity.
+
+Origin: ThinkSmart View port; see PROVENANCE.md
+
+---
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -269,8 +269,8 @@
+ 		reg = <0x49>;
+ 
+ 		pdn-gpios = <&tlmm 44 GPIO_ACTIVE_LOW>;
+-		/* The next two GPIOs are connected but unused by the driver */
+-		mute-gpio = <&tlmm 0 GPIO_ACTIVE_HIGH>;
++		mute-gpios = <&tlmm 0 GPIO_ACTIVE_HIGH>;
++		/* Fault indication is not used by the driver. */
+ 		fault-gpio = <&tlmm 45 GPIO_ACTIVE_HIGH>;
+ 		pvdd-supply = <&speaker_amp_pvdd>;
+ 

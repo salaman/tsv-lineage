@@ -1,0 +1,411 @@
+Subject: [PATCH] sensors: iio: handle reflectance hysteresis and valid polling samples
+
+Expose reflectance as Android near/far proximity with configurable hysteresis. Distinguish failed reads from valid initial zero samples, and enforce the advertised polling limit; retain native sample tests.
+
+Origin: Local ThinkSmart View port
+Base-commit: b5134567f8b8bce819b3686d045acfc120e0159f
+Apply in filename order within this project.
+
+---
+diff --git a/Android.bp b/Android.bp
+index 69f1b12..9532028 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -80,6 +80,19 @@ cc_library_shared {
+     srcs: [":sensors_iio_srcs"],
+ }
+ 
++cc_test {
++    name: "sensors_iio_sample_test",
++    defaults: ["intel_sensors_iio_cc_defaults"],
++    srcs: [
++        ":sensors_iio_srcs",
++        "sample_test.cpp",
++    ],
++    cflags: [
++        "-DLOG_TAG=\"SensorsTest\"",
++        "-Wno-missing-field-initializers",
++    ],
++}
++
+ cc_binary {
+     name: "sens",
+     defaults: ["intel_sensors_iio_cc_defaults"],
+diff --git a/common.h b/common.h
+index fad55ca..069ad2d 100644
+--- a/common.h
++++ b/common.h
+@@ -182,6 +182,8 @@ typedef struct
+ 	float max_range;
+ 	float resolution;
+ 	float power;
++	float proximity_near_level;
++	float proximity_far_level;
+ 
+ 	/*
+ 	 * Currently active trigger - either a pointer to the initial (default) trigger name buffer, or a pointer to the motion trigger name buffer,
+@@ -352,12 +354,12 @@ void discover_sensors(int dev_num, char *sysfs_base_path, char map[catalog_size]
+ 
+ #define DECLARE_CHANNEL(tag, spacer, name)		\
+ 			name,				\
+-			"in_"tag spacer name"_en",	\
+-			"in_"tag spacer name"_type",	\
+-			"in_"tag spacer name"_index",	\
+-			"in_"tag spacer name"_raw",	\
+-			"in_"tag spacer name"_input",	\
+-			"in_"tag spacer name"_scale",	\
++			"in_" tag spacer name "_en",	\
++			"in_" tag spacer name "_type",	\
++			"in_" tag spacer name "_index",	\
++			"in_" tag spacer name "_raw",	\
++			"in_" tag spacer name "_input",	\
++			"in_" tag spacer name "_scale",	\
+ 			0, {{0}},
+ 
+ #define DECLARE_NAMED_CHANNEL(tag, name)	DECLARE_CHANNEL(tag, "_", name)
+@@ -366,8 +368,8 @@ void discover_sensors(int dev_num, char *sysfs_base_path, char map[catalog_size]
+ 
+ #define DECLARE_EVENT(tag, spacer1, name, spacer2, type, spacer3, dir)		\
+ 		      type, dir,						\
+-		      "in_"tag spacer1 name spacer2 type spacer3 dir"_en",	\
+-		      "in_"tag spacer1 name spacer2 type spacer3 dir"_value",	\
++		      "in_" tag spacer1 name spacer2 type spacer3 dir "_en",	\
++		      "in_" tag spacer1 name spacer2 type spacer3 dir "_value",	\
+ 
+ #define DECLARE_GENERIC_EVENT(tag, name, type, dir) \
+ 		DECLARE_EVENT(tag, "_", name, "_", type, "_", dir)
+diff --git a/control.c b/control.c
+index b366917..27b7b1c 100644
+--- a/control.c
++++ b/control.c
+@@ -573,14 +573,18 @@ static void* acquisition_routine (void* param)
+ 
+ 	/* Check and honor termination requests */
+ 	while (sensor[s].thread_data_fd[1] != -1) {
++		int sample_valid = 1;
+ 		start = get_timestamp_boot();
+ 
+ 		/* Read values through sysfs */
+ 		for (c=0; c<num_fields; c++) {
+ 			if (field_size == sizeof(uint64_t))
+ 				data.u64.data[c] = acquire_immediate_uint64_value(s, c);
+-			else
++			else {
+ 				data.data[c] = acquire_immediate_float_value(s, c);
++				if (!isfinite(data.data[c]))
++					sample_valid = 0;
++			}
+ 
+ 			/* Check and honor termination requests */
+ 			if (sensor[s].thread_data_fd[1] == -1)
+@@ -590,7 +594,7 @@ static void* acquisition_routine (void* param)
+ 		set_report_ts(s, start/2 + stop/2);
+ 		data.timestamp = sensor[s].report_ts;
+ 		/* If the sample looks good */
+-		if (sensor[s].ops.finalize(s, &data)) {
++		if (sample_valid && sensor[s].ops.finalize(s, &data)) {
+ 
+ 			/* Pipe it for transmission to poll loop */
+ 			ret = write(sensor[s].thread_data_fd[1], &data, sizeof(sensors_event_t));
+diff --git a/description.c b/description.c
+--- a/description.c
++++ b/description.c
+@@ -16,6 +16,7 @@
+ 
+ #include <stdlib.h>
+ #include <ctype.h>
++#include <math.h>
+ #include <utils/Log.h>
+ #include <cutils/properties.h>
+ #include <hardware/sensors.h>
+@@ -764,6 +765,9 @@ int32_t sensor_get_min_delay (int s)
+ 	 */
+ 	switch (REPORTING_MODE(sensor_desc[s].flags)) {
+ 		case SENSOR_FLAG_ON_CHANGE_MODE:
++			if (max_from_prop >= 0.1f &&
++			    max_from_prop < 1000000.0f / MIN_ON_CHANGE_SAMPLING_PERIOD_US)
++				return (int32_t) ceilf(1000000.0f / max_from_prop);
+ 			return MIN_ON_CHANGE_SAMPLING_PERIOD_US;
+ 
+ 		case SENSOR_FLAG_SPECIAL_REPORTING_MODE:
+diff --git a/enumeration.c b/enumeration.c
+index 3b24a6a..39f30b7 100644
+--- a/enumeration.c
++++ b/enumeration.c
+@@ -17,6 +17,7 @@
+ #include <ctype.h>
+ #include <dirent.h>
+ #include <stdlib.h>
++#include <math.h>
+ #include <fcntl.h>
+ #include <utils/Log.h>
+ #include <sys/stat.h>
+@@ -620,6 +621,21 @@ static int add_sensor (int dev_num, int catalog_index, int mode)
+ 	sprintf(sysfs_path, NAME_PATH, dev_num);
+ 	sysfs_read_str(sysfs_path, sensor[s].internal_name, INTERNAL_NAME_SIZE);
+ 
++	if (sensor_type == SENSOR_TYPE_PROXIMITY &&
++	    !sensor_get_fl_prop(s, "near_level", &sensor[s].proximity_near_level)) {
++		if (sensor_get_fl_prop(s, "far_level", &sensor[s].proximity_far_level))
++			sensor[s].proximity_far_level = sensor[s].proximity_near_level;
++		if (!isfinite(sensor[s].proximity_near_level) ||
++		    !isfinite(sensor[s].proximity_far_level) ||
++		    sensor[s].proximity_near_level <= 0 ||
++		    sensor[s].proximity_far_level < 0 ||
++		    sensor[s].proximity_far_level > sensor[s].proximity_near_level) {
++			ALOGE("Invalid near/far thresholds for proximity sensor %d", s);
++			memset(&sensor[s], 0, sizeof(sensor[0]));
++			return -1;
++		}
++	}
++
+ 	/* See if we have general offsets and scale values for this sensor */
+ 
+ 	sprintf(sysfs_path, SENSOR_OFFSET_PATH, dev_num, prefix);
+@@ -1184,4 +1200,3 @@ int get_sensors_list (__attribute__((unused)) struct sensors_module_t* module,
+ 	*list = sensor_desc;
+ 	return sensor_count;
+ }
+-
+diff --git a/transform.c b/transform.c
+index ce9754d..51a2e76 100644
+--- a/transform.c
++++ b/transform.c
+@@ -15,6 +15,7 @@
+ */
+ 
+ #include <stdlib.h>
++#include <errno.h>
+ #include <math.h>
+ #include <utils/Log.h>
+ #include <cutils/properties.h>
+@@ -313,6 +314,14 @@ static void process_event (int s, sensors_event_t* data)
+ 
+ static int finalize_sample_default (int s, sensors_event_t* data)
+ {
++	if ((sensor[s].type == SENSOR_TYPE_PROXIMITY ||
++	     sensor[s].type == SENSOR_TYPE_LIGHT ||
++	     sensor[s].type == SENSOR_TYPE_INTERNAL_ILLUMINANCE ||
++	     sensor[s].type == SENSOR_TYPE_INTERNAL_INTENSITY) &&
++	    !isfinite(data->data[0])) {
++		ALOGE("Discarding invalid sample for sensor %d", s);
++		return 0;
++	}
+ 	/* Swap fields if we have a custom channel ordering on this sensor */
+ 	if (sensor[s].quirks & QUIRK_FIELD_ORDERING)
+ 		reorder_fields(data->data, sensor[s].order);
+@@ -366,6 +375,22 @@ static int finalize_sample_default (int s, sensors_event_t* data)
+ 			break;
+ 
+ 		case SENSOR_TYPE_PROXIMITY:
++			if (sensor[s].proximity_near_level > 0) {
++				/* Reflectance counts increase on approach, unlike distance. */
++				float value = data->data[0];
++				if (value >= sensor[s].proximity_near_level)
++					data->data[0] = 0;
++				else if (value <= sensor[s].proximity_far_level ||
++					 sensor[s].event_count == 1)
++					data->data[0] = sensor_desc[s].maxRange;
++				else
++					data->data[0] = sensor[s].prev_val.data;
++				if (sensor[s].event_count > 1 &&
++				    data->data[0] == sensor[s].prev_val.data)
++					return 0;
++				sensor[s].prev_val.data = data->data[0];
++				break;
++			}
+ 			/*
+ 			 * See iio spec for in_proximity* - depending on the device
+ 			 * this value is either in meters either unit-less and cannot
+@@ -383,7 +408,8 @@ static int finalize_sample_default (int s, sensors_event_t* data)
+ 			data->data[0] = 0.01 * ((int) (data->data[0] * 100 / 1000));
+ 
+ 			/* These are on change sensors ; drop the sample if it has the same value as the previously reported one. */
+-			if (data->data[0] == sensor[s].prev_val.data)
++			if (sensor[s].event_count > 1 &&
++			    data->data[0] == sensor[s].prev_val.data)
+ 				return 0;
+ 
+ 			sensor[s].prev_val.data = data->data[0];
+@@ -396,7 +422,8 @@ static int finalize_sample_default (int s, sensors_event_t* data)
+ 			data->data[0] = 0.01 * ((int) (data->data[0] * 100));
+ 
+ 			/* These are on change sensors ; drop the sample if it has the same value as the previously reported one. */
+-			if (data->data[0] == sensor[s].prev_val.data)
++			if (sensor[s].event_count > 1 &&
++			    data->data[0] == sensor[s].prev_val.data)
+ 				return 0;
+ 
+ 			sensor[s].prev_val.data = data->data[0];
+@@ -579,14 +606,18 @@ float acquire_immediate_float_value (int s, int c)
+ 		}
+ 	}
+ 
+-	if (!sensor[s].channel[c].raw_path_present)
+-		return 0;
++	if (!sensor[s].channel[c].raw_path_present) {
++		ALOGE("No readable data channel for sensor %d", s);
++		return NAN;
++	}
+ 
+ 	sprintf(sysfs_path, BASE_PATH "%s", dev_num, raw_path);
+ 	ret = sysfs_read_float(sysfs_path, &val);
+ 
+-	if (ret == -1)
+-		return 0;
++	if (ret == -1) {
++		ALOGE("Failed to read sensor %d from %s: %s", s, sysfs_path, strerror(errno));
++		return NAN;
++	}
+ 
+ 	/*
+ 	 * There is no transform ops defined yet for raw sysfs values.
+diff --git a/sample_test.cpp b/sample_test.cpp
+new file mode 100644
+index 0000000..d80b8c6
+--- /dev/null
++++ b/sample_test.cpp
+@@ -0,0 +1,143 @@
++/*
++ * SPDX-License-Identifier: Apache-2.0
++ * Copyright (C) 2026
++ */
++
++#include <algorithm>
++#include <cmath>
++#include <cstring>
++#include <gtest/gtest.h>
++#include <hardware/sensors.h>
++
++extern "C" {
++#include "common.h"
++#include "description.h"
++#include "enumeration.h"
++#include "transform.h"
++float sensor_get_max_freq(int s);
++}
++
++class SampleTest : public testing::Test {
++protected:
++    void SetUp() override {
++        std::memset(&sensor[0], 0, sizeof(sensor[0]));
++        std::memset(&sensor_desc[0], 0, sizeof(sensor_desc[0]));
++        sensor_count = 1;
++        sensor[0].type = SENSOR_TYPE_PROXIMITY;
++        sensor[0].proximity_near_level = 3;
++        sensor[0].proximity_far_level = 2;
++        sensor_desc[0].maxRange = 5;
++        select_transform(0);
++    }
++
++    int sample(float raw, float* output = nullptr) {
++        sensors_event_t event{};
++        event.data[0] = raw;
++        int result = sensor[0].ops.finalize(0, &event);
++        if (output != nullptr) {
++            *output = event.data[0];
++        }
++        return result;
++    }
++};
++
++TEST_F(SampleTest, FirstNearZeroIsReported) {
++    float value;
++    EXPECT_EQ(sample(3, &value), 1);
++    EXPECT_FLOAT_EQ(value, 0);
++    EXPECT_EQ(sample(4), 0);
++}
++
++TEST_F(SampleTest, FarHasAndroidMaximumRange) {
++    float value;
++    EXPECT_EQ(sample(0.125f, &value), 1);
++    EXPECT_FLOAT_EQ(value, 5);
++    EXPECT_EQ(sample(0.1875f), 0);
++}
++
++TEST_F(SampleTest, ThresholdHysteresisPreservesBothStates) {
++    float value;
++    EXPECT_EQ(sample(1), 1);
++    EXPECT_EQ(sample(2.5f), 0);
++    EXPECT_EQ(sample(3, &value), 1);
++    EXPECT_FLOAT_EQ(value, 0);
++    EXPECT_EQ(sample(2.5f), 0);
++    EXPECT_EQ(sample(2, &value), 1);
++    EXPECT_FLOAT_EQ(value, 5);
++}
++
++TEST_F(SampleTest, FirstHysteresisBandSampleIsFar) {
++    float value;
++    EXPECT_EQ(sample(2.5f, &value), 1);
++    EXPECT_FLOAT_EQ(value, 5);
++}
++
++TEST_F(SampleTest, InvalidSampleDoesNotChangePreviousState) {
++    EXPECT_EQ(sample(4), 1);
++    EXPECT_EQ(sample(NAN), 0);
++    EXPECT_EQ(sample(INFINITY), 0);
++    EXPECT_EQ(sample(4), 0);
++    float value;
++    EXPECT_EQ(sample(1, &value), 1);
++    EXPECT_FLOAT_EQ(value, 5);
++}
++
++TEST_F(SampleTest, FirstDarkLightSampleIsReported) {
++    sensor[0].type = SENSOR_TYPE_INTERNAL_ILLUMINANCE;
++    float value;
++    EXPECT_EQ(sample(0, &value), 1);
++    EXPECT_FLOAT_EQ(value, 0);
++    EXPECT_EQ(sample(0), 0);
++    EXPECT_EQ(sample(0.6f, &value), 1);
++    EXPECT_NEAR(value, 0.6f, 0.011f);
++}
++
++TEST_F(SampleTest, InvalidLightSampleDoesNotBecomeDarkness) {
++    sensor[0].type = SENSOR_TYPE_INTERNAL_ILLUMINANCE;
++    EXPECT_EQ(sample(NAN), 0);
++    EXPECT_EQ(sample(INFINITY), 0);
++    EXPECT_EQ(sensor[0].event_count, 0);
++    EXPECT_EQ(sample(0), 1);
++}
++
++TEST_F(SampleTest, MissingSysfsValueIsNotAZeroReading) {
++    sensor[0].dev_num = -1;
++    bool found = false;
++    for (unsigned int i = 0; i < catalog_size; ++i) {
++        if (sensor_catalog[i].type == SENSOR_TYPE_PROXIMITY) {
++            sensor[0].catalog_index = i;
++            found = true;
++            break;
++        }
++    }
++    ASSERT_TRUE(found);
++    sensor[0].channel[0].raw_path_present = 1;
++    sensor[0].scale = 1;
++    sensor[0].channel[0].opt_scale = 1;
++    EXPECT_TRUE(std::isnan(acquire_immediate_float_value(0, 0)));
++}
++
++TEST_F(SampleTest, OnChangePollingRespectsConfiguredFrequencyCaps) {
++    const int types[] = {SENSOR_TYPE_INTERNAL_ILLUMINANCE, SENSOR_TYPE_PROXIMITY};
++    for (int type : types) {
++        SCOPED_TRACE(type);
++        sensor[0].type = type;
++        sensor[0].mode = MODE_POLL;
++        sensor_desc[0].flags = SENSOR_FLAG_ON_CHANGE_MODE;
++        bool found = false;
++        for (unsigned int i = 0; i < catalog_size; ++i) {
++            if (sensor_catalog[i].type == type) {
++                sensor[0].catalog_index = i;
++                found = true;
++                break;
++            }
++        }
++        ASSERT_TRUE(found);
++        const float cap = sensor_get_max_freq(0);
++        ASSERT_TRUE(std::isfinite(cap));
++        ASSERT_GE(cap, 0.1f);
++        const int32_t expected = std::max<int32_t>(
++                200000, static_cast<int32_t>(std::ceil(1000000.0f / cap)));
++        EXPECT_EQ(sensor_get_min_delay(0), expected);
++    }
++}

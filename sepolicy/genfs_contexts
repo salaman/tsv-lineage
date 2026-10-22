@@ -1,0 +1,1 @@
+genfscon sysfs /devices/platform/i2c-sensors/i2c-0/0-0051 u:object_r:vendor_sysfs_iio:s0

@@ -1,0 +1,185 @@
+Subject: [PATCH] powerstats: reset inherited timestamps at a new aggregation session
+
+Do not carry a component's previous-session timestamp past the start of a new aggregation session. Preserve chronological sample deltas and descriptor transitions; cover replay and reset behavior with framework tests.
+
+Origin: Local ThinkSmart View port
+Base-commit: 1c45e31a86be95f51a94ffd1a5014c3fb2019112
+Apply in filename order within this project.
+
+---
+diff --git a/services/core/java/com/android/server/power/stats/processor/PowerComponentAggregatedPowerStats.java b/services/core/java/com/android/server/power/stats/processor/PowerComponentAggregatedPowerStats.java
+index d285a59..a51fc0b 100644
+--- a/services/core/java/com/android/server/power/stats/processor/PowerComponentAggregatedPowerStats.java
++++ b/services/core/java/com/android/server/power/stats/processor/PowerComponentAggregatedPowerStats.java
+@@ -112,6 +112,10 @@ class PowerComponentAggregatedPowerStats {
+     }
+ 
+     void start(long timestampMs) {
++        // Reuse a preceding sample across consecutive spans, not one in a replay's future.
++        if (mPowerStatsTimestamp > timestampMs) {
++            mPowerStatsTimestamp = UNKNOWN;
++        }
+         if (mProcessor == null) {
+             mProcessor = mConfig.createProcessor();
+         }
+diff --git a/services/tests/powerstatstests/src/com/android/server/power/stats/processor/AggregatedPowerStatsTest.java b/services/tests/powerstatstests/src/com/android/server/power/stats/processor/AggregatedPowerStatsTest.java
+index 978fd1a..61d6995 100644
+--- a/services/tests/powerstatstests/src/com/android/server/power/stats/processor/AggregatedPowerStatsTest.java
++++ b/services/tests/powerstatstests/src/com/android/server/power/stats/processor/AggregatedPowerStatsTest.java
+@@ -94,6 +94,121 @@ public class AggregatedPowerStatsTest {
+         verifyAggregatedPowerStats(stats);
+     }
+ 
++    @Test
++    public void resetReplayingEarlierWindow() {
++        verifyWindowAfterReset(100_000, 0, 1);
++    }
++
++    @Test
++    public void resetReplayingSameWindow() {
++        verifyWindowAfterReset(0, 0, 1);
++    }
++
++    @Test
++    public void resetReplayingLaterWindow() {
++        verifyWindowAfterReset(0, 100_000, 1);
++    }
++
++    @Test
++    public void resetRepeatedlyReplayingEarlierWindow() {
++        verifyWindowAfterReset(100_000, 0, 2);
++    }
++
++    @Test
++    public void resetContinuingChronologicalWindow() {
++        verifyContinuingWindow(2500);
++    }
++
++    @Test
++    public void resetContinuingAtLastSample() {
++        verifyContinuingWindow(2000);
++    }
++
++    private void verifyContinuingWindow(long start) {
++        AggregatedPowerStats stats = new AggregatedPowerStats(mAggregatedPowerStatsConfig);
++        recordResetWindow(stats, 0);
++        stats.reset();
++        stats.start(start);
++        stats.setDeviceState(AggregatedPowerStatsConfig.STATE_SCREEN,
++                AggregatedPowerStatsConfig.SCREEN_STATE_ON, 2600);
++        stats.setUidState(APP_1, AggregatedPowerStatsConfig.STATE_PROCESS_STATE,
++                BatteryConsumer.PROCESS_STATE_FOREGROUND, 2600);
++        PowerStats ps = new PowerStats(mPowerComponentDescriptor);
++        ps.stats[0] = 200;
++        ps.stats[1] = 400;
++        ps.stateStats.put(COMPONENT_STATE_0, new long[]{500});
++        ps.uidStats.put(APP_1, new long[]{100, 200, 300});
++        stats.addPowerStats(ps, 3500);
++        verifyResetWindow(stats);
++    }
++
++    private void verifyWindowAfterReset(long previousStart, long nextStart, int resets) {
++        AggregatedPowerStats stats = new AggregatedPowerStats(mAggregatedPowerStatsConfig);
++        recordResetWindow(stats, previousStart);
++        verifyResetWindow(stats);
++        for (int i = 0; i < resets; i++) {
++            stats.reset();
++        }
++        recordResetWindow(stats, nextStart);
++        verifyResetWindow(stats);
++    }
++
++    private void recordResetWindow(AggregatedPowerStats stats, long start) {
++        stats.start(start);
++        PowerStats ps = new PowerStats(mPowerComponentDescriptor);
++        ps.uidStats.put(APP_1, new long[3]);
++        stats.addPowerStats(ps, start);
++        stats.setDeviceState(AggregatedPowerStatsConfig.STATE_SCREEN,
++                AggregatedPowerStatsConfig.SCREEN_STATE_ON, start);
++        stats.setUidState(APP_1, AggregatedPowerStatsConfig.STATE_PROCESS_STATE,
++                BatteryConsumer.PROCESS_STATE_FOREGROUND, start);
++
++        ps.stats[0] = 120;
++        ps.stats[1] = 240;
++        ps.stateStats.put(COMPONENT_STATE_0, new long[]{300});
++        ps.uidStats.put(APP_1, new long[]{60, 120, 180});
++        stats.addPowerStats(ps, start + 1000);
++        stats.setDeviceState(AggregatedPowerStatsConfig.STATE_SCREEN,
++                AggregatedPowerStatsConfig.SCREEN_STATE_OTHER, start + 1000);
++        stats.setUidState(APP_1, AggregatedPowerStatsConfig.STATE_PROCESS_STATE,
++                BatteryConsumer.PROCESS_STATE_BACKGROUND, start + 1000);
++
++        ps.stats[0] = 80;
++        ps.stats[1] = 160;
++        ps.stateStats.put(COMPONENT_STATE_0, new long[]{200});
++        ps.uidStats.put(APP_1, new long[]{40, 80, 120});
++        stats.addPowerStats(ps, start + 2000);
++    }
++
++    private void verifyResetWindow(AggregatedPowerStats stats) {
++        assertThat(getDeviceStats(stats, TEST_POWER_COMPONENT,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_ON))
++                .isEqualTo(new long[]{120, 240});
++        assertThat(getDeviceStats(stats, TEST_POWER_COMPONENT,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_OTHER))
++                .isEqualTo(new long[]{80, 160});
++        assertThat(getStateStats(stats, COMPONENT_STATE_0,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_ON))
++                .isEqualTo(new long[]{300});
++        assertThat(getStateStats(stats, COMPONENT_STATE_0,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_OTHER))
++                .isEqualTo(new long[]{200});
++        assertThat(getUidDeviceStats(stats, TEST_POWER_COMPONENT, APP_1,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_ON,
++                BatteryConsumer.PROCESS_STATE_FOREGROUND))
++                .isEqualTo(new long[]{60, 120, 180});
++        assertThat(getUidDeviceStats(stats, TEST_POWER_COMPONENT, APP_1,
++                AggregatedPowerStatsConfig.POWER_STATE_BATTERY,
++                AggregatedPowerStatsConfig.SCREEN_STATE_OTHER,
++                BatteryConsumer.PROCESS_STATE_BACKGROUND))
++                .isEqualTo(new long[]{40, 80, 120});
++    }
++
+     @Test
+     public void xmlPersistence() throws Exception {
+         AggregatedPowerStats stats = prepareAggregatePowerStats();
+diff --git a/services/tests/powerstatstests/src/com/android/server/power/stats/processor/PowerStatsAggregatorTest.java b/services/tests/powerstatstests/src/com/android/server/power/stats/processor/PowerStatsAggregatorTest.java
+index 7aa59bd..6157153 100644
+--- a/services/tests/powerstatstests/src/com/android/server/power/stats/processor/PowerStatsAggregatorTest.java
++++ b/services/tests/powerstatstests/src/com/android/server/power/stats/processor/PowerStatsAggregatorTest.java
+@@ -43,6 +43,7 @@ import java.text.SimpleDateFormat;
+ import java.util.Date;
+ import java.util.List;
+ import java.util.TimeZone;
++import java.util.function.Consumer;
+ 
+ @RunWith(AndroidJUnit4.class)
+ @SmallTest
+@@ -119,7 +120,7 @@ public class PowerStatsAggregatorTest {
+         powerStats.uidStats.put(TEST_UID, new long[]{4444});
+         mHistory.recordPowerStats(mClock.realtime, mClock.uptime, powerStats);
+ 
+-        mAggregator.aggregatePowerStats(mHistory, 0, MonotonicClock.UNDEFINED, stats -> {
++        Consumer<AggregatedPowerStats> consumer = stats -> {
+             assertThat(mAggregatedStatsCount++).isEqualTo(0);
+             assertThat(stats.getStartTime()).isEqualTo(START_TIME);
+ 
+@@ -174,7 +175,12 @@ public class PowerStatsAggregatorTest {
+                     BatteryConsumer.PROCESS_STATE_BACKGROUND}))
+                     .isTrue();
+             assertThat(values).isEqualTo(new long[]{3333});
+-        });
++        };
++        mAggregator.aggregatePowerStats(mHistory, 0, MonotonicClock.UNDEFINED, consumer);
++        assertThat(mAggregatedStatsCount).isEqualTo(1);
++        mAggregatedStatsCount = 0;
++        mAggregator.aggregatePowerStats(mHistory, 0, MonotonicClock.UNDEFINED, consumer);
++        assertThat(mAggregatedStatsCount).isEqualTo(1);
+     }
+ 
+     @NonNull

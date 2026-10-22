@@ -1,0 +1,56 @@
+From: Isaac J. Manjarres <isaacmanjarres@google.com>
+Subject: ANDROID: mm: shmem: Use memfd-ashmem-shim ioctl handler
+
+Local Linux 7.1 port of the Android common-patches change at
+95c6537fa2f92733e8b9fe23ab4ace2446070f41.
+
+Keep the memfd compatibility handler without depending on ASHMEM_C or the
+separate Android ASHMEM_RUST driver. Preserve Linux 7.1's mmap_prepare and
+setlease operations.
+
+Origin: Local ThinkSmart View port
+Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Apply in filename order within this project.
+
+---
+diff --git a/mm/Kconfig b/mm/Kconfig
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -1242,7 +1242,8 @@ config MEMFD_CREATE
+ 
+ config MEMFD_ASHMEM_SHIM
+ 	bool "Memfd ashmem ioctl compatibility support"
++	default y
+ 	depends on MEMFD_CREATE
+ 	help
+ 	  This provides compatibility support for ashmem ioctl commands against
+ 	  memfd file descriptors. This is useful for compatibility on Android
+diff --git a/mm/shmem.c b/mm/shmem.c
+--- a/mm/shmem.c
++++ b/mm/shmem.c
+@@ -86,6 +86,10 @@ static struct vfsmount *shm_mnt __ro_after_init;
+ 
+ #include "internal.h"
+ 
++#ifdef CONFIG_MEMFD_ASHMEM_SHIM
++#include "memfd-ashmem-shim.h"
++#endif
++
+ #define VM_ACCT(size)    (PAGE_ALIGN(size) >> PAGE_SHIFT)
+ 
+ /* Pretend that each entry is of this size in directory's i_size */
+@@ -5225,8 +5229,14 @@ static const struct file_operations shmem_file_operations = {
+ 	.fsync		= noop_fsync,
+ 	.splice_read	= shmem_file_splice_read,
+ 	.splice_write	= iter_file_splice_write,
+ 	.fallocate	= shmem_fallocate,
+ 	.setlease	= generic_setlease,
+ #endif
++#ifdef CONFIG_MEMFD_ASHMEM_SHIM
++	.unlocked_ioctl	= memfd_ashmem_shim_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl	= memfd_ashmem_shim_compat_ioctl,
++#endif
++#endif
+ };
+ 

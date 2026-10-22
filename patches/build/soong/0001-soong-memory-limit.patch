@@ -1,0 +1,37 @@
+Subject: [PATCH] soong: allow an optional build-host memory limit
+
+Respect SOONG_MEMORY_LIMIT_GIB when bounding Soong's Go memory target on constrained builders. Leave upstream behavior unchanged unless the host explicitly requests the override. This is not a device runtime fix.
+
+Origin: Local ThinkSmart View port
+Base-commit: 9aa045a2aef10b8089e32e847fed26d9aa3d61be
+Apply in filename order within this project.
+
+---
+diff --git a/cmd/soong_build/main.go b/cmd/soong_build/main.go
+--- a/cmd/soong_build/main.go
++++ b/cmd/soong_build/main.go
+@@ -22,6 +22,8 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"runtime"
++	"runtime/debug"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -325,6 +327,15 @@ func main() {
+ 	availableEnv := parseAvailableEnv()
+ 	configuration, err := android.NewConfig(cmdlineArgs, availableEnv)
+ 	maybeQuit(err, "")
++	if value := configuration.Getenv("SOONG_MEMORY_LIMIT_GIB"); value != "" {
++		limit, err := strconv.ParseUint(value, 10, 32)
++		maybeQuit(err, "invalid SOONG_MEMORY_LIMIT_GIB")
++		if limit == 0 {
++			fmt.Fprintln(os.Stderr, "SOONG_MEMORY_LIMIT_GIB must be positive")
++			os.Exit(1)
++		}
++		debug.SetMemoryLimit(int64(limit) << 30)
++	}
+ 	if configuration.Getenv("ALLOW_MISSING_DEPENDENCIES") == "true" {
+ 		configuration.SetAllowMissingDependencies()
+ 	}

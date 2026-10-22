@@ -1,0 +1,672 @@
+Subject: [PATCH] thermal: report AIDL events with correct sampling and Looper ownership
+
+Deliver temperature changes through the AIDL callback path, and give sampling and Looper objects explicit lifetimes. Prevent stale callbacks, sampling regressions and teardown races; include native regression coverage.
+
+Origin: Local ThinkSmart View port
+Base-commit: d062161c81d3d2b61b27425c2e39c728eab7f9f0
+Apply in filename order within this project.
+
+---
+--- a/hal/thermal/src/Android.bp
++++ b/hal/thermal/src/Android.bp
+@@ -39,7 +39,6 @@
+     shared_libs: [
+ 	"libpm_libthermal",
+         "libbase",
+-        "libhidlbase",
+         "libutils",
+ 	"libjsoncpp",
+ 	"libbinder_ndk",
+@@ -52,3 +51,20 @@
+ 
+     cflags: ["-fexceptions"],
+ }
++
++cc_test {
++    name: "linaro_thermal_test",
++    vendor: true,
++    srcs: ["Thermal.cpp", "Config.cpp", "LibThermal.cpp", "ThermalTest.cpp"],
++    shared_libs: [
++        "libpm_libthermal",
++        "libbase",
++        "libutils",
++        "libjsoncpp",
++        "libbinder_ndk",
++        "android.hardware.thermal-V1-ndk",
++    ],
++    header_libs: ["libpm_libthermal_headers"],
++    cflags: ["-fexceptions"],
++    ldflags: ["-Wl,--wrap=thermal_init"],
++}
+--- a/hal/thermal/src/LibThermal.cpp
++++ b/hal/thermal/src/LibThermal.cpp
+@@ -14,6 +14,7 @@
+  * limitations under the License.
+  */
+ #include <android-base/logging.h>
++#include <cstdlib>
+ 
+ #include "LibThermal.h"
+ 
+@@ -115,20 +116,49 @@
+ 	return getThermalCdev(name) != NULL;
+ }
+ 
+-LibThermal::LibThermal(void)
++void LibThermal::cleanup()
++{
++	if (m_tz) {
++		for (int i = 0; m_tz[i].id != -1; ++i)
++			free(m_tz[i].trip);
++		free(m_tz);
++		m_tz = nullptr;
++	}
++	free(m_cdev);
++	m_cdev = nullptr;
++	if (m_th) {
++		thermal_exit(m_th);
++		m_th = nullptr;
++	}
++}
++
++LibThermal::~LibThermal()
++{
++	cleanup();
++}
++
++LibThermal::LibThermal(struct thermal_ops ops) : m_ops(ops)
+ {
+ 	LOG(DEBUG) << "Initializing the thermal library";
+ 
+-	m_th = thermal_init(&m_ops);
+-	if (!m_th)
+-		throw("Failed to initialize the thermal library");
++	try {
++		m_th = thermal_init(&m_ops);
++		if (!m_th)
++			throw("Failed to initialize the thermal library");
+ 
+-	m_tz = thermal_zone_discover(m_th);
+-	if (!m_tz)
+-		throw("Failed to discover the thermal zones");
++		if (thermal_sampling_exit(m_th))
++			throw("Failed to close unused thermal sampling stream");
+ 
+-	if (thermal_cmd_get_cdev(m_th, &m_cdev))
+-		throw("Failed to discover the cooling devices");
++		m_tz = thermal_zone_discover(m_th);
++		if (!m_tz)
++			throw("Failed to discover the thermal zones");
++
++		if (thermal_cmd_get_cdev(m_th, &m_cdev))
++			throw("Failed to discover the cooling devices");
++	} catch (const char*) {
++		cleanup();
++		throw;
++	}
+ }
+ 
+ }  // namespace linaro_generic
+--- a/hal/thermal/src/LibThermal.h
++++ b/hal/thermal/src/LibThermal.h
+@@ -63,20 +63,21 @@
+ 
+ class LibThermal {
+ 
+-private:
++protected:
+ 	struct thermal_zone *getThermalZone(int id);
+ 	struct thermal_zone *getThermalZone(std::string name);
+ 	struct thermal_cdev *getThermalCdev(int id);
+ 	struct thermal_cdev *getThermalCdev(std::string name);
+ 
+-protected:
+-	struct thermal_ops	 m_ops;
+-	struct thermal_handler	*m_th;
+-	struct thermal_zone	*m_tz;
+-	struct thermal_cdev	*m_cdev;
++	struct thermal_ops	 m_ops{};
++	struct thermal_handler	*m_th{};
++	struct thermal_zone	*m_tz{};
++	struct thermal_cdev	*m_cdev{};
+ 
+-	LibThermal();
++	LibThermal(struct thermal_ops ops);
++	void cleanup();
+ public:
++	virtual ~LibThermal();
+ 	int getThermalZonetemp(const std::string name);
+ 	int getThermalZonetemp(struct thermal_zone *tz);
+ 	int getThermalZonetemp(int id);
+--- a/hal/thermal/src/Thermal.cpp
++++ b/hal/thermal/src/Thermal.cpp
+@@ -16,6 +16,7 @@
+ #define LOG_TAG "android.hardware.thermal-service.linaro-generic"
+ 
+ #include <cmath>
++#include <cstdlib>
+ #include <set>
+ 
+ #include <android-base/logging.h>
+@@ -49,11 +50,16 @@
+  */
+ ndk::ScopedAStatus Thermal::getTemperatures(std::vector<Temperature>* temperatures)
+ {
++	temperatures->clear();
+ 	for (auto &p : m_config.m_temperature) {
+ 		int temperature = getThermalZonetemp(p.name);
+ 
+-		if (temperature != INT_MAX)
+-			p.value = temperature / 1000.0;
++		if (temperature == INT_MAX)
++			return ndk::ScopedAStatus::fromExceptionCodeWithMessage(
++				EX_ILLEGAL_STATE, "Failed to read thermal sensor");
++
++		p.value = temperature / 1000.0;
++		p.throttlingStatus = throttlingSeverity(p.name, p.value);
+ 	}
+ 
+ 	*temperatures = m_config.m_temperature;
+@@ -63,8 +69,11 @@
+ 
+ ndk::ScopedAStatus Thermal::getTemperaturesWithType(TemperatureType in_type, std::vector<Temperature>* temperatures)
+ {
++	temperatures->clear();
+ 	std::vector<Temperature> updated_temps;
+-	getTemperatures(&updated_temps);
++	auto status = getTemperatures(&updated_temps);
++	if (!status.isOk())
++		return status;
+ 
+ 	for (auto p : updated_temps)
+ 		if (p.type == in_type)
+@@ -89,9 +98,30 @@
+  */
+ ndk::ScopedAStatus Thermal::getCoolingDevices(std::vector<CoolingDevice>* coolingDevices)
+ {
++	coolingDevices->clear();
+ 	if (m_config.m_cooling_device.empty())
+ 		return ndk::ScopedAStatus::fromExceptionCodeWithMessage(EX_SERVICE_SPECIFIC, strerror(-ENODEV));
+ 
++	struct thermal_cdev *updated = nullptr;
++	if (thermal_cmd_get_cdev(m_th, &updated) || !updated) {
++		free(updated);
++		LOG(ERROR) << "Failed to read cooling device states";
++		return ndk::ScopedAStatus::fromExceptionCodeWithMessage(
++			EX_ILLEGAL_STATE, "Failed to read cooling device states");
++	}
++	free(m_cdev);
++	m_cdev = updated;
++
++	for (auto &p : m_config.m_cooling_device) {
++		auto cdev = getThermalCdev(p.name);
++		if (!cdev) {
++			LOG(ERROR) << "Missing cooling device " << p.name;
++			return ndk::ScopedAStatus::fromExceptionCodeWithMessage(
++				EX_ILLEGAL_STATE, "Missing cooling device");
++		}
++		p.value = cdev->cur_state;
++	}
++
+ 	*coolingDevices = m_config.m_cooling_device;
+ 
+ 	return ndk::ScopedAStatus::ok();
+@@ -99,10 +129,13 @@
+ 
+ ndk::ScopedAStatus Thermal::getCoolingDevicesWithType(CoolingType in_type, std::vector<CoolingDevice>* coolingDevices)
+ {
+-	if (m_config.m_cooling_device.empty())
+-		return ndk::ScopedAStatus::fromExceptionCodeWithMessage(EX_SERVICE_SPECIFIC, strerror(-ENODEV));
+-
+-	for (auto &p : m_config.m_cooling_device)
++	coolingDevices->clear();
++	std::vector<CoolingDevice> updated;
++	auto status = getCoolingDevices(&updated);
++	if (!status.isOk())
++		return status;
++
++	for (auto &p : updated)
+ 		if (p.type == in_type)
+ 			coolingDevices->push_back(p);
+ 
+@@ -133,6 +166,7 @@
+  */
+ ndk::ScopedAStatus Thermal::getTemperatureThresholds(std::vector<TemperatureThreshold>* out_temperatureThresholds)
+ {
++	out_temperatureThresholds->clear();
+ 	if (m_config.m_threshold.empty())
+ 		return ndk::ScopedAStatus::fromExceptionCodeWithMessage(EX_SERVICE_SPECIFIC, strerror(-ENODEV));
+ 
+@@ -144,6 +178,7 @@
+ 
+ ndk::ScopedAStatus Thermal::getTemperatureThresholdsWithType(TemperatureType in_type, std::vector<TemperatureThreshold>* out_temperatureThresholds)
+ {
++	out_temperatureThresholds->clear();
+ 	if (m_config.m_threshold.empty())
+ 		return ndk::ScopedAStatus::fromExceptionCodeWithMessage(EX_SERVICE_SPECIFIC, strerror(-ENODEV));
+ 
+@@ -293,13 +328,26 @@
+ 	}
+ 
+ 	threshold = m_config.m_threshold[name];
++	auto zone = getThermalZone(name);
++	auto sensor = std::find_if(m_config.m_temperature.begin(), m_config.m_temperature.end(),
++				  [&](const Temperature &p) { return p.name == name; });
+ 
+ 	for (std::underlying_type<ThrottlingSeverity>::type ts = std::__to_underlying(ThrottlingSeverity::NONE); ts <= std::__to_underlying(ThrottlingSeverity::SHUTDOWN); ts++) {
+ 
+ 		if (std::isnan(threshold.hotThrottlingThresholds[(int)ts]))
+ 			continue;
+ 
+-		if (temperature < threshold.hotThrottlingThresholds[(int)ts])
++		float limit = threshold.hotThrottlingThresholds[(int)ts];
++		if (sensor != m_config.m_temperature.end() &&
++		    std::__to_underlying(sensor->throttlingStatus) >= ts && zone && zone->trip) {
++			for (auto trip = zone->trip; trip->id != -1; ++trip)
++				if (trip->temp / 1000.0 == limit) {
++					limit -= trip->hyst / 1000.0;
++					break;
++				}
++		}
++
++		if (temperature < limit)
+ 			break;
+ 
+ 		severity = static_cast<ThrottlingSeverity>(ts);
+@@ -760,7 +808,33 @@
+ 	return thermal->handleThermalEvents();
+ }
+ 
+-Thermal::Thermal(Looper *looper)
++struct thermal_ops Thermal::thermalOperations()
++{
++	struct thermal_ops ops{};
++	ops.events.tz_create = thermalZoneCreate;
++	ops.events.tz_delete = thermalZoneDelete;
++	ops.events.tz_disable = thermalZoneDisable;
++	ops.events.tz_enable = thermalZoneEnable;
++	ops.events.trip_high = tripHigh;
++	ops.events.trip_low = tripLow;
++	ops.events.trip_add = tripAdd;
++	ops.events.trip_delete = tripDelete;
++	ops.events.trip_change = tripChange;
++	ops.events.cdev_add = cdevAdd;
++	ops.events.cdev_delete = cdevDelete;
++	ops.events.cdev_update = cdevUpdate;
++	ops.events.gov_change = govChange;
++	return ops;
++}
++
++Thermal::~Thermal()
++{
++	m_looper->removeFd(thermal_events_fd(m_th));
++}
++
++Thermal::Thermal(const ::android::sp<Looper>& looper)
++	: LibThermal(thermalOperations()),
++	  m_looper(looper)
+ {
+ 	LOG(DEBUG) << "Initializing the configuration";
+ 
+@@ -788,28 +862,6 @@
+ 			++it;
+ 		}
+ 	}
+-
+-	/*
+-	 * The Thermal class is inherited from the LibThermal. The
+-	 * constructor of the Libthermal will initialize itself. We
+-	 * can safely set the callback after the initialization of the
+-	 * LibThermal as those are needed when calling the
+-	 * 'thermal_events_handle()' function, so after setting and
+-	 * polling the file descriptor.
+-	 */
+-        m_ops.events.tz_create   = thermalZoneCreate;
+-	m_ops.events.tz_delete   = thermalZoneDelete;
+-	m_ops.events.tz_disable	 = thermalZoneDisable;
+-	m_ops.events.tz_enable	 = thermalZoneEnable;
+-	m_ops.events.trip_high	 = tripHigh;
+-	m_ops.events.trip_low	 = tripLow;
+-	m_ops.events.trip_add	 = tripAdd;
+-	m_ops.events.trip_delete = tripDelete;
+-	m_ops.events.trip_change = tripChange;
+-	m_ops.events.cdev_add    = cdevAdd;
+-	m_ops.events.cdev_delete = cdevDelete;
+-	m_ops.events.cdev_update = cdevUpdate;
+-	m_ops.events.gov_change  = govChange;
+ 
+ 	if (!looper->addFd(thermal_events_fd(this->m_th), 0,
+ 			   Looper::EVENT_INPUT, thermalHandleEvent, this))
+--- a/hal/thermal/src/Thermal.h
++++ b/hal/thermal/src/Thermal.h
+@@ -58,9 +58,12 @@
+ 
+ 	int handleThermalEvents(void);
+ 
+-	Thermal(Looper *);
++	Thermal(const ::android::sp<Looper>&);
++	~Thermal() override;
+ 
+ private:
++	friend class ThermalTest;
++	static struct thermal_ops thermalOperations();
+ 	static int thermalZoneDelete(int, void *);
+ 	static int thermalZoneCreate(const char *, int, void *);
+ 	static int thermalZoneEnable(int tz_id, void *arg);
+@@ -85,6 +88,7 @@
+ 	int tripCrossed(int tz_id, int trip_id, int temp, Thermal *thermal, bool up);
+ 
+ 	Config m_config;
++	::android::sp<Looper> m_looper;
+ 
+ 	std::mutex m_callback_mutex;
+ 	std::vector<ThermalCallbackSetting> m_callbacks;
+--- /dev/null
++++ b/hal/thermal/src/ThermalTest.cpp
+@@ -0,0 +1,204 @@
++#include <gtest/gtest.h>
++#include <aidl/android/hardware/thermal/BnThermalChangedCallback.h>
++#include <dirent.h>
++
++#include "Thermal.h"
++
++namespace aidl::android::hardware::thermal::impl::linaro_generic {
++
++extern "C" struct thermal_handler* __real_thermal_init(struct thermal_ops*);
++
++extern "C" struct thermal_handler* __wrap_thermal_init(struct thermal_ops* ops) {
++    EXPECT_TRUE(ops->events.trip_high && ops->events.trip_low && ops->events.cdev_update)
++        << "Callbacks must be installed before libthermal snapshots enabled events";
++    return __real_thermal_init(ops);
++}
++
++class RecordingCallback : public BnThermalChangedCallback {
++public:
++    ndk::ScopedAStatus notifyThrottling(const Temperature& temperature) override {
++        received.push_back(temperature);
++        return ndk::ScopedAStatus::ok();
++    }
++    std::vector<Temperature> received;
++};
++
++class ThermalTest : public ::testing::Test {
++protected:
++    void SetUp() override {
++        looper = ::android::sp<Looper>::make(false);
++        createThermal();
++    }
++
++    void createThermal() {
++        try {
++            thermal = ndk::SharedRefBase::make<Thermal>(looper);
++        } catch (const char* error) {
++            FAIL() << error;
++        }
++    }
++
++    int descriptorCount() {
++        DIR* directory = opendir("/proc/self/fd");
++        EXPECT_NE(directory, nullptr);
++        if (!directory)
++            return -1;
++        int count = 0;
++        while (readdir(directory))
++            ++count;
++        closedir(directory);
++        return count;
++    }
++
++    ThrottlingSeverity severity(const std::string& name, float value,
++                               ThrottlingSeverity previous = ThrottlingSeverity::NONE) {
++        for (auto& sensor : thermal->m_config.m_temperature) {
++            if (sensor.name == name) {
++                sensor.throttlingStatus = previous;
++                return thermal->throttlingSeverity(name, value);
++            }
++        }
++        ADD_FAILURE() << "Missing configured sensor " << name;
++        return ThrottlingSeverity::NONE;
++    }
++
++    void removeSensor() {
++        thermal->m_config.m_temperature.front().name = "missing-test-sensor";
++    }
++
++    void removeCoolingDevice() {
++        thermal->m_config.m_cooling_device.front().name = "missing-test-cdev";
++    }
++
++    void trip(const std::string& name, int temperature, bool up) {
++        auto zone = thermal->getThermalZone(name);
++        ASSERT_NE(zone, nullptr);
++        EXPECT_EQ(thermal->tripCrossed(zone->id, 0, temperature, thermal.get(), up), 0);
++    }
++
++    ::android::sp<Looper> looper;
++    std::shared_ptr<Thermal> thermal;
++};
++
++TEST_F(ThermalTest, CpuThresholdsAndKernelHysteresis) {
++    EXPECT_EQ(severity("cpu0-thermal", 79.999f), ThrottlingSeverity::NONE);
++    EXPECT_EQ(severity("cpu0-thermal", 80.0f), ThrottlingSeverity::LIGHT);
++    EXPECT_EQ(severity("cpu0-thermal", 79.0f, ThrottlingSeverity::LIGHT),
++              ThrottlingSeverity::LIGHT);
++    EXPECT_EQ(severity("cpu0-thermal", 78.0f, ThrottlingSeverity::LIGHT),
++              ThrottlingSeverity::LIGHT);
++    EXPECT_EQ(severity("cpu0-thermal", 77.999f, ThrottlingSeverity::LIGHT),
++              ThrottlingSeverity::NONE);
++    EXPECT_EQ(severity("cpu0-thermal", 100.0f), ThrottlingSeverity::SHUTDOWN);
++    EXPECT_EQ(severity("cpu0-thermal", 99.0f, ThrottlingSeverity::SHUTDOWN),
++              ThrottlingSeverity::SHUTDOWN);
++    EXPECT_EQ(severity("cpu0-thermal", 97.999f, ThrottlingSeverity::SHUTDOWN),
++              ThrottlingSeverity::LIGHT);
++}
++
++TEST_F(ThermalTest, GpuThresholdsAndKernelHysteresis) {
++    EXPECT_EQ(severity("gpu-thermal", 69.999f), ThrottlingSeverity::NONE);
++    EXPECT_EQ(severity("gpu-thermal", 70.0f), ThrottlingSeverity::LIGHT);
++    EXPECT_EQ(severity("gpu-thermal", 69.0f, ThrottlingSeverity::LIGHT),
++              ThrottlingSeverity::LIGHT);
++    EXPECT_EQ(severity("gpu-thermal", 67.999f, ThrottlingSeverity::LIGHT),
++              ThrottlingSeverity::NONE);
++    EXPECT_EQ(severity("gpu-thermal", 90.0f), ThrottlingSeverity::SHUTDOWN);
++}
++
++TEST_F(ThermalTest, TemperaturesAndThresholdsReplaceOutput) {
++    std::vector<Temperature> temperatures;
++    for (int iteration = 0; iteration < 2; ++iteration) {
++        ASSERT_TRUE(thermal->getTemperatures(&temperatures).isOk());
++        ASSERT_EQ(temperatures.size(), 9u);
++        ASSERT_TRUE(thermal->getTemperaturesWithType(TemperatureType::CPU,
++                                                    &temperatures).isOk());
++        EXPECT_EQ(temperatures.size(), 8u);
++        for (const auto& sensor : temperatures) {
++            EXPECT_GT(sensor.value, -40.0f);
++            EXPECT_LT(sensor.value, 100.0f);
++        }
++    }
++    std::vector<TemperatureThreshold> thresholds;
++    for (int iteration = 0; iteration < 2; ++iteration) {
++        ASSERT_TRUE(thermal->getTemperatureThresholds(&thresholds).isOk());
++        EXPECT_EQ(thresholds.size(), 9u);
++        ASSERT_TRUE(thermal->getTemperatureThresholdsWithType(TemperatureType::GPU,
++                                                             &thresholds).isOk());
++        EXPECT_EQ(thresholds.size(), 1u);
++    }
++}
++
++TEST_F(ThermalTest, CoolingDevicesReplaceOutput) {
++    std::vector<CoolingDevice> devices;
++    for (int iteration = 0; iteration < 2; ++iteration) {
++        ASSERT_TRUE(thermal->getCoolingDevices(&devices).isOk());
++        EXPECT_EQ(devices.size(), 2u);
++        ASSERT_TRUE(thermal->getCoolingDevicesWithType(CoolingType::GPU, &devices).isOk());
++        ASSERT_EQ(devices.size(), 1u);
++        EXPECT_EQ(devices.front().name, "devfreq-1c00000.gpu");
++        EXPECT_GE(devices.front().value, 0);
++        EXPECT_LE(devices.front().value, 7);
++    }
++}
++
++TEST_F(ThermalTest, MissingSensorFailsBothQueries) {
++    removeSensor();
++    std::vector<Temperature> temperatures(1);
++    EXPECT_FALSE(thermal->getTemperatures(&temperatures).isOk());
++    EXPECT_TRUE(temperatures.empty());
++    temperatures.resize(1);
++    EXPECT_FALSE(thermal->getTemperaturesWithType(TemperatureType::CPU,
++                                                 &temperatures).isOk());
++    EXPECT_TRUE(temperatures.empty());
++}
++
++TEST_F(ThermalTest, MissingCoolingDeviceFailsBothQueries) {
++    removeCoolingDevice();
++    std::vector<CoolingDevice> devices(1);
++    EXPECT_FALSE(thermal->getCoolingDevices(&devices).isOk());
++    EXPECT_TRUE(devices.empty());
++    devices.resize(1);
++    EXPECT_FALSE(thermal->getCoolingDevicesWithType(CoolingType::GPU, &devices).isOk());
++    EXPECT_TRUE(devices.empty());
++}
++
++TEST_F(ThermalTest, CallbacksRespectTypeAndRegistrationLifecycle) {
++    auto callback = ndk::SharedRefBase::make<RecordingCallback>();
++    ASSERT_TRUE(thermal->registerThermalChangedCallbackWithType(
++        callback, TemperatureType::GPU).isOk());
++    EXPECT_FALSE(thermal->registerThermalChangedCallback(callback).isOk());
++    trip("cpu0-thermal", 80000, true);
++    EXPECT_TRUE(callback->received.empty());
++    trip("gpu-thermal", 70000, true);
++    ASSERT_EQ(callback->received.size(), 1u);
++    EXPECT_EQ(callback->received.back().throttlingStatus, ThrottlingSeverity::LIGHT);
++    trip("gpu-thermal", 67999, false);
++    ASSERT_EQ(callback->received.size(), 2u);
++    EXPECT_EQ(callback->received.back().throttlingStatus, ThrottlingSeverity::NONE);
++    ASSERT_TRUE(thermal->unregisterThermalChangedCallback(callback).isOk());
++    EXPECT_FALSE(thermal->unregisterThermalChangedCallback(callback).isOk());
++    trip("gpu-thermal", 70000, true);
++    EXPECT_EQ(callback->received.size(), 2u);
++}
++
++TEST_F(ThermalTest, ReinitializationReleasesLibraryAndDescriptors) {
++    thermal.reset();
++    const int baseline = descriptorCount();
++    ASSERT_GT(baseline, 0);
++    for (int iteration = 0; iteration < 3; ++iteration) {
++        ASSERT_NO_FATAL_FAILURE(createThermal());
++        thermal.reset();
++        EXPECT_EQ(descriptorCount(), baseline);
++    }
++}
++
++TEST_F(ThermalTest, RetainsLooperUntilThermalDestruction) {
++    ::android::wp<Looper> weak = looper;
++    looper.clear();
++    EXPECT_NE(weak.promote(), nullptr);
++    thermal.reset();
++    EXPECT_EQ(weak.promote(), nullptr);
++}
++
++}  // namespace aidl::android::hardware::thermal::impl::linaro_generic
+--- a/hal/thermal/src/service.cpp
++++ b/hal/thermal/src/service.cpp
+@@ -20,11 +20,6 @@
+ #include <android-base/logging.h>
+ #include <android/binder_manager.h>
+ #include <android/binder_process.h>
+-#include <hidl/HidlTransportSupport.h>
+-
+-// libhwbinder:
+-using ::android::hardware::setupTransportPolling;
+-using ::android::hardware::handleTransportPoll;
+ 
+ // libutils:
+ using ::android::Looper;
+@@ -45,10 +40,10 @@
+ 	exit(exit_code);
+ }
+ 
+-static int transportCallback(int fd, __attribute__((unused)) int event,
++static int transportCallback(__attribute__((unused)) int fd, __attribute__((unused)) int event,
+ 			     __attribute__((unused)) void *data)
+ {
+-	handleTransportPoll(fd);
++	CHECK_EQ(ABinderProcess_handlePolledCommands(), STATUS_OK);
+ 	return 1;
+ }
+ 
+@@ -56,8 +51,7 @@
+ {
+ 	int fd;
+ 
+-	fd = setupTransportPolling();
+-	if (fd < 0)
++	if (ABinderProcess_setupPolling(&fd) != STATUS_OK || fd < 0)
+ 		return false;
+ 
+ 	if (!looper->addFd(fd, 0, Looper::EVENT_INPUT, transportCallback, NULL))
+@@ -70,11 +64,11 @@
+ {
+ 	ABinderProcess_setThreadPoolMaxThreadCount(0);
+ 	std::shared_ptr<Thermal> thermal;
+-	Looper *looper;
++	::android::sp<Looper> looper;
+ 
+ 	LOG(DEBUG) << "Thermal HAL Service generic starting...";
+ 
+-	looper = new Looper(false);
++	looper = ::android::sp<Looper>::make(false);
+ 	if (looper == nullptr) {
+ 		LOG(ERROR) << "Failed to create looper object";
+ 		return shutdown(THERMAL_HAL_INTERNAL_ERROR);
+@@ -88,7 +82,7 @@
+ 		}
+ 	}
+ 
+-	catch(std::string error) {
++	catch(const char *error) {
+ 		LOG(ERROR) << "Exception when creating Thermal object error: " << error;
+ 		return shutdown(THERMAL_HAL_INTERNAL_ERROR);
+ 	}
+@@ -99,7 +93,7 @@
+ 	// the locking hell and an unexpected behavior with the
+ 	// netlink thermal protocol.
+ 	//
+-	if (!setupTransportCallback(looper)) {
++	if (!setupTransportCallback(looper.get())) {
+ 		LOG(ERROR) << "Failed to setup transport callback";
+ 		return shutdown(THERMAL_HAL_INTERNAL_ERROR);
+ 	}
+@@ -109,8 +103,8 @@
+             AServiceManager_addService(thermal->asBinder().get(), instance.c_str());
+ 	CHECK(status == STATUS_OK);
+ 
+-	ABinderProcess_joinThreadPool();
+-	looper->pollAll(-1);
++	while (looper->pollOnce(-1) != Looper::POLL_ERROR) {}
+ 
+-	return EXIT_FAILURE;  // should not reach
++	LOG(ERROR) << "Thermal event loop failed";
++	return shutdown(THERMAL_HAL_INTERNAL_ERROR);
+ }
+--- a/lib/thermal/src/sampling.c
++++ b/lib/thermal/src/sampling.c
+@@ -53,11 +53,18 @@
+ 
+ thermal_error_t thermal_sampling_exit(struct thermal_handler *th)
+ {
++	if (!th)
++		return THERMAL_ERROR;
++	if (!th->sk_sampling)
++		return THERMAL_SUCCESS;
++
+ 	if (nl_unsubscribe_thermal(th->sk_sampling, th->cb_sampling,
+ 				   THERMAL_GENL_SAMPLING_GROUP_NAME))
+ 		return THERMAL_ERROR;
+ 
+ 	nl_thermal_disconnect(th->sk_sampling, th->cb_sampling);
++	th->sk_sampling = NULL;
++	th->cb_sampling = NULL;
+ 
+ 	return THERMAL_SUCCESS;
+ }
