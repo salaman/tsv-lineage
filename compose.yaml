@@ -11,9 +11,6 @@ services:
     init: true
     stdin_open: true
     tty: true
-    mem_limit: 30g
-    environment:
-      SOONG_MEMORY_LIMIT_GIB: ${SOONG_MEMORY_LIMIT_GIB:-20}
     volumes:
       - source:/android
       - home:/home/builder

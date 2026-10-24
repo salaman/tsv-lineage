@@ -13,8 +13,6 @@ Standard Android `repo`, `lunch` and `m`; no separate build system.
 | Unsupported | Camera, accelerometer, full suspend, OTA installation |
 | Security | Experimental userdebug; SELinux permissive; verified boot disabled |
 
-**This cleaned layout has not yet produced a boot-qualified image.**
-
 ## Contents and requirements
 
 | Item | Location / requirement |
@@ -33,47 +31,54 @@ See [PROVENANCE.md](PROVENANCE.md) for copied-source origins and licenses.
 
 ## Build
 
-Set `PORT_REPO` to this repository's Git URL. Use a real device directory, not a symlink.
+Use Linux Bash and a real device directory, not a symlink.
+
+### Build environment
+
+```sh
+docker compose build
+docker compose run --rm builder
+```
+
+Docker starts in the persistent Linux source volume `/android`; `/integration`
+is this checkout. Builds use Docker's available CPU, memory and disk.
+Set `HOST_UID` / `HOST_GID` when needed. On Apple Silicon enable amd64/Rosetta
+emulation. Native Linux hosts can instead install the [Dockerfile](Dockerfile)
+dependencies.
+
+### Sources
 
 ```sh
 mkdir android-tsv && cd android-tsv
 repo init -u https://github.com/LineageOS/android.git -b lineage-23.2 --git-lfs
 DEVICE=device/lenovo/thinksmart
 mkdir -p device/lenovo .repo/local_manifests
-git clone --recurse-submodules "$PORT_REPO" "$DEVICE"
+git clone --recurse-submodules https://github.com/salaman/tsv-lineage.git "$DEVICE"
 cp "$DEVICE/manifests/thinksmart.xml" .repo/local_manifests/
 repo sync -c --no-tags --no-clone-bundle --fail-fast -j4
 
 bash "$DEVICE/tools/apply-patches.sh" "$PWD"
-# Extract private firmware as below before building.
-source build/envsetup.sh
-lunch lineage_thinksmart bp4a userdebug
-m -j2 bootimage recoveryimage systemimage vendorimage
 ```
 
-For this unpublished staging copy, replace `git clone` with
-`cp -a /absolute/path/to/tsv-lineage "$DEVICE"`.
+To use this checkout instead, replace the `git clone` line with:
+
+```sh
+cp -a /integration "$DEVICE"
+git -C "$DEVICE" submodule update --init --recursive
+```
+
+Outside Docker, replace `/integration` with this checkout's absolute path.
+Scripts and patches require LF line endings; `.gitattributes` enforces this for
+new checkouts.
 
 Patches apply in numbered filename order within each project, starting at `0001`;
-there are no `series` files. Apply queues **once to clean projects**.
-The helper leaves ordinary uncommitted
-Git changes and stops on errors; it never resets sources or repairs partial applies.
-Rebase/edit patches with normal Git tools. Branch-tracking dependencies can change.
-All queues are applied, including these build-host controls (neither changes device behavior):
-
-| Build-host patch | Purpose |
-|---|---|
-| Soong | `SOONG_MEMORY_LIMIT_GIB=20` sets a soft Go runtime memory target; not a whole-build RAM cap |
-| Mesa | Makes nested Ninja honor `THINKSMART_MESA_JOBS` (default `2`); Android's outer `-j` does not limit it |
-
-Kernel jobs also default to `2`, independently of these patches.
-
-Optional Docker: `docker compose build && docker compose run --rm builder`.
-The shell has `/integration` and an independent `/android` source volume; copy
-the device tree from `/integration`. Set `HOST_UID` / `HOST_GID` when needed.
-On Apple Silicon enable amd64/Rosetta emulation. Docker capacity shares host disk.
+there are no `series` files. Apply queues **once to clean projects**. The helper
+leaves uncommitted changes and stops on errors without resetting sources.
+Branch-tracking dependencies can change.
 
 ## Firmware
+
+### Files and origins
 
 | Input | Origin |
 |---|---|
@@ -82,20 +87,53 @@ On Apple Silicon enable amd64/Rosetta emulation. Docker capacity shares host dis
 | Wi-Fi | Stock modem board/firmware/OTP; helper creates the ath10k container |
 | Speaker DSP tuning | [Community board firmware](https://gitlab.com/kaechele/postmarketos-vendor-lenovo-cd-18781y), revision `337032e864fd6abe29375997fc3683398a4d27c4`, `sound/tas5728m_dsp_lenovo_cd-18781y.bin` |
 
-Read stock partitions with your configured EDL tool:
-`edl r modem modem.img` and `edl r vendor vendor.img`. No live device access
-is performed by the extraction helper. Inputs must be **raw partition images**.
+The extraction helper verifies all 29 files and refuses existing output.
+Keep firmware private; redistribution permission is not assumed.
+Examples use `/private` for inputs; in Docker use `/integration/private`.
+
+### Extract via EDL
+
+Read the stock partitions with your configured EDL tool, then extract using the
+speaker DSP file listed above:
 
 ```sh
+edl r modem /private/modem.img
+edl r vendor /private/vendor.img
+
 bash "$DEVICE/tools/extract-firmware.sh" --stock \
   /private/modem.img /private/vendor.img /private/tas5728m_dsp_lenovo_cd-18781y.bin \
   "$DEVICE/firmware"
 ```
 
-Alternatively, extract all 29 files from this port's existing raw vendor backup:
-`bash "$DEVICE/tools/extract-firmware.sh" --android-vendor /private/vendor.img "$DEVICE/firmware"`.
-Both modes verify every checksum and refuse existing output. Keep blobs private;
-redistribution permission is not assumed.
+### Extract via ADB
+
+Requires root ADB and a read-only `/vendor` mount. For a device running this port:
+
+```sh
+adb exec-out cat /dev/block/by-name/vendor > /private/vendor.img
+adb exec-out cat /dev/block/by-name/boot > /private/original-physical-boot.img
+
+bash "$DEVICE/tools/extract-firmware.sh" --android-vendor \
+  /private/vendor.img "$DEVICE/firmware"
+```
+
+For stock Android, also read `modem` and use `--stock` as above:
+
+```sh
+adb exec-out cat /dev/block/by-name/modem > /private/modem.img
+```
+
+## Build images
+
+From the source root, after firmware extraction:
+
+```sh
+source build/envsetup.sh
+lunch lineage_thinksmart bp4a userdebug
+m bootimage recoveryimage systemimage vendorimage
+```
+
+Images are written to `out/target/product/thinksmart`.
 
 ## Installation
 
@@ -118,7 +156,7 @@ python3 "$DEVICE/tools/prepare-boot.py" \
 | Update | `vendor.img` to `vendor`, `system.img` to `system`, composed boot to `boot`; preserve userdata/cache |
 | Initial install | Same, plus prepared userdata and `cache.img`; **erases user data** |
 
-Initial install additionally needs `m -j2 userdataimage cacheimage` and these
+Initial install additionally needs `m userdataimage cacheimage` and these
 Android host tools (`out/host/linux-x86/bin` on `PATH`):
 
 ```sh

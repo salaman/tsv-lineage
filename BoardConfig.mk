@@ -1,7 +1,5 @@
 DEVICE_PATH := device/lenovo/thinksmart
 include device/mainline/qcom-common/BoardConfigMainlineQcomCommon.mk
-THINKSMART_KERNEL_JOBS ?= 2
-THINKSMART_MESA_JOBS ?= 2
 $(call soong_config_set,mainline_qcom_common_soc,primary_audio_policy_configuration_variant,none)
 
 TARGET_BOOTLOADER_BOARD_NAME := CD-18781Y
@@ -46,7 +44,6 @@ BOARD_KERNEL_CMDLINE := \
     console=tty0
 
 BOARD_MESA3D_VULKAN_DRIVERS :=
-BOARD_MESA3D_NINJA_ARGS := -j$(THINKSMART_MESA_JOBS)
 $(call soong_config_set,minigbm_upstream,platform,msm)
 
 TARGET_KERNEL_SOURCE := kernel/mainline/msm8953-mainline
@@ -60,7 +57,7 @@ TARGET_KERNEL_CONFIG_EXT := \
     $(DEVICE_PATH)/kconfigs/hardware.config \
     $(DEVICE_PATH)/kconfigs/thinksmart.config
 MERGE_ALL_KERNEL_CONFIGS_AT_ONCE := true
-TARGET_KERNEL_ADDITIONAL_FLAGS := LLVM=1 -j$(THINKSMART_KERNEL_JOBS)
+TARGET_KERNEL_ADDITIONAL_FLAGS := LLVM=1
 TARGET_KERNEL_DTB := qcom/apq8053-lenovo-cd-18781y.dtb
 TARGET_DTB_LIST_WILDCARD := qcom/apq8053-lenovo-cd-18781y
 TARGET_AUTO_COLLECT_KERNEL_MODULE_DEPS := true
