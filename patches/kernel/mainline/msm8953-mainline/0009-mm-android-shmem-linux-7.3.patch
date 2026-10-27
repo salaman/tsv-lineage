@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: "Isaac J. Manjarres" <isaacmanjarres@google.com>
+Date: Tue, 28 Jan 2025 14:59:07 -0800
+Subject: [PATCH] ANDROID: mm: shmem: Use memfd-ashmem-shim ioctl handler
+
+Local Linux 7.3 port of the Android common-patches change at
+95c6537fa2f92733e8b9fe23ab4ace2446070f41.
+
+Keep the memfd compatibility handler without depending on ASHMEM_C or the
+separate Android ASHMEM_RUST driver. Preserve Linux 7.3's mmap_prepare and
+setlease operations. Enable the shim in the device configuration rather
+than changing its global Kconfig default.
+
+Origin: Android common-patches; locally adapted for Linux 7.3
+Source: https://android.googlesource.com/kernel/common-patches/+/95c6537fa2f92733e8b9fe23ab4ace2446070f41/android-mainline/ANDROID-mm-shmem-Use-memfd-ashmem-shim-ioctl-handler.patch
+License: GPL-2.0 (kernel sources)
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+Apply in filename order within this project.
+
+Bug: 111903542
+Bug: 415769373
+Change-Id: I0bf57ac5a90dba66e5c2c32beff70bcf9d26db6b
+Signed-off-by: Isaac J. Manjarres <isaacmanjarres@google.com>
+
+---
+diff --git a/mm/shmem.c b/mm/shmem.c
+index 848316eaa7f4fb84c6eb8304c3015978483f419c..371f41fd945fb8e56eed1d36d21201450b9bac09 100644
+--- a/mm/shmem.c
++++ b/mm/shmem.c
+@@ -87,6 +87,10 @@ static struct vfsmount *shm_mnt __ro_after_init;
+ 
+ #include "internal.h"
+ 
++#ifdef CONFIG_MEMFD_ASHMEM_SHIM
++#include "memfd-ashmem-shim.h"
++#endif
++
+ #define VM_ACCT(size)    (PAGE_ALIGN(size) >> PAGE_SHIFT)
+ 
+ /* Pretend that each entry is of this size in directory's i_size */
+@@ -5187,6 +5191,12 @@ static const struct file_operations shmem_file_operations = {
+ 	.fallocate	= shmem_fallocate,
+ 	.setlease	= generic_setlease,
+ #endif
++#ifdef CONFIG_MEMFD_ASHMEM_SHIM
++	.unlocked_ioctl	= memfd_ashmem_shim_ioctl,
++#ifdef CONFIG_COMPAT
++	.compat_ioctl	= memfd_ashmem_shim_compat_ioctl,
++#endif
++#endif
+ };
+ 
+ static const struct inode_operations shmem_inode_operations = {

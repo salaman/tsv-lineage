@@ -1,9 +1,13 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] powerstats: reset inherited timestamps at a new aggregation session
 
 Do not carry a component's previous-session timestamp past the start of a new aggregation session. Preserve chronological sample deltas and descriptor transitions; cover replay and reset behavior with framework tests.
 
 Origin: Local ThinkSmart View port
-Base-commit: 1c45e31a86be95f51a94ffd1a5014c3fb2019112
+Source: https://github.com/LineageOS/android_frameworks_base
+Base-commit: 653be4a9d2b0c727136694c789975e27fa7cdcef
 Apply in filename order within this project.
 
 ---

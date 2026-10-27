@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
+Subject: [PATCH] driver_cmd_fallback: answer MACADDR from the network interface
+
+The generic fallback returns an empty reply for MACADDR. The AIDL
+supplicant interface rejects it, and Android's PMK cache cannot identify
+the interface. Use the existing Linux ioctl helper to obtain the actual
+current interface address and return the format expected by the AIDL
+implementation. Propagate ioctl and reply-truncation failures.
+
+The board must select lib_driver_cmd_fallback as its
+BOARD_WPA_SUPPLICANT_PRIVATE_LIB; otherwise ANDROID_LIB_STUB removes the
+nl80211 driver-command callback and this implementation is never reached.
+
+Use the fully qualified Soong dependency
+//external/wpa_supplicant_8/wpa_supplicant/wpa_supplicant:lib_driver_cmd_fallback
+in BoardConfig.mk. Exporting that namespace also exposes Cuttlefish
+wpa_supplicant and hostapd modules with duplicate names.
+
+Other Android-private driver commands retain their existing behavior;
+this does not claim support for vendor coexistence or suspend commands.
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_external_wpa_supplicant_8
+License: Apache-2.0 (modified upstream sources)
+Base-commit: 1063d796b547c4cd2c23c21da72ed988ac70a84a
+Apply in filename order within this project.
+
+---
+diff --git a/wpa_supplicant/wpa_supplicant/libdrivercmdfallback/driver_cmd_nl80211.c b/wpa_supplicant/wpa_supplicant/libdrivercmdfallback/driver_cmd_nl80211.c
+index 6cdc57a..510fbd8 100644
+--- a/wpa_supplicant/wpa_supplicant/libdrivercmdfallback/driver_cmd_nl80211.c
++++ b/wpa_supplicant/wpa_supplicant/libdrivercmdfallback/driver_cmd_nl80211.c
+@@ -20,9 +20,25 @@
+ #include "includes.h"
+ 
+ #include "common.h"
++#include "driver_nl80211.h"
++#include "linux_ioctl.h"
+ 
+ int wpa_driver_nl80211_driver_cmd(void* priv, char* cmd, char* buf,
+                                   size_t buf_len) {
++  if (os_strcasecmp(cmd, "MACADDR") == 0) {
++    struct i802_bss* bss = priv;
++    u8 addr[ETH_ALEN];
++    int ret;
++
++    if (linux_get_ifhwaddr(bss->drv->global->ioctl_sock, bss->ifname, addr))
++      return -1;
++    ret = os_snprintf(buf, buf_len, "Macaddr = " MACSTR "\n", MAC2STR(addr));
++    if (os_snprintf_error(buf_len, ret)) {
++      wpa_printf(MSG_ERROR, "MACADDR reply buffer is too small");
++      return -1;
++    }
++    return ret;
++  }
+   return 0;
+ }
+ 

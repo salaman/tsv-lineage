@@ -1,8 +1,12 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] thermal: report AIDL events with correct sampling and Looper ownership
 
 Deliver temperature changes through the AIDL callback path, and give sampling and Looper objects explicit lifetimes. Prevent stale callbacks, sampling regressions and teardown races; include native regression coverage.
 
 Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_hardware_linaro_libpm
 Base-commit: d062161c81d3d2b61b27425c2e39c728eab7f9f0
 Apply in filename order within this project.
 

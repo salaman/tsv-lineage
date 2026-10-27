@@ -1,16 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] ASoC: register the ThinkSmart TAS5782M codec
 
 Build the locally maintained TAS5782M sources as an in-tree codec module.
 The source files and their original attribution live in drivers/tas5782m.
 
-Origin: ThinkSmart View port; see PROVENANCE.md
+Origin: Local ThinkSmart View port
+Source: https://github.com/msm8953-mainline/linux
+Codec-source-credits: drivers/tas5782m/README.md in the device tree.
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+
 
 ---
 diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
-index 2c4d8f6..a410147 100644
+index 4b97798c83a289d8e1160d7d6f3ca501e7e6d116..6fe3ce19ae7288e6b92f09916885b9859b0a5beb 100644
 --- a/sound/soc/codecs/Kconfig
 +++ b/sound/soc/codecs/Kconfig
-@@ -2222,6 +2222,14 @@ config SND_SOC_TAS5720
+@@ -2271,6 +2271,14 @@ config SND_SOC_TAS5720
  	  Enable support for Texas Instruments TAS5720L/M high-efficiency mono
  	  Class-D audio power amplifiers.
  
@@ -26,22 +33,22 @@ index 2c4d8f6..a410147 100644
  	tristate "Texas Instruments TAS5805M speaker amplifier"
  	depends on I2C
 diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
-index 0e1345d..f4e9e97 100644
+index 7395f6c1244d909e0bf3b950966596c270867941..84b45b4242149ec8e655997bbe451d683c765df1 100644
 --- a/sound/soc/codecs/Makefile
 +++ b/sound/soc/codecs/Makefile
-@@ -316,6 +316,7 @@ snd-soc-sti-sas-y := sti-sas.o
+@@ -321,6 +321,7 @@ snd-soc-tac5xx2-sdw-y := tac5xx2-sdw.o
  snd-soc-tas5086-y := tas5086.o
  snd-soc-tas571x-y := tas571x.o
  snd-soc-tas5720-y := tas5720.o
 +snd-soc-tas5782m-y := tas5782m.o tas5782m_tables.o
  snd-soc-tas5805m-y := tas5805m.o
  snd-soc-tas6424-y := tas6424.o
- snd-soc-tda7419-y := tda7419.o
-@@ -759,6 +760,7 @@ obj-$(CONFIG_SND_SOC_TAS2783_SDW)	+= snd-soc-tas2783-sdw.o
+ snd-soc-tas675x-y := tas675x.o
+@@ -772,6 +773,7 @@ obj-$(CONFIG_SND_SOC_TAS2783_SDW)	+= snd-soc-tas2783-sdw.o
  obj-$(CONFIG_SND_SOC_TAS5086)	+= snd-soc-tas5086.o
  obj-$(CONFIG_SND_SOC_TAS571X)	+= snd-soc-tas571x.o
  obj-$(CONFIG_SND_SOC_TAS5720)	+= snd-soc-tas5720.o
 +obj-$(CONFIG_SND_SOC_TAS5782M)	+= snd-soc-tas5782m.o
  obj-$(CONFIG_SND_SOC_TAS5805M)	+= snd-soc-tas5805m.o
  obj-$(CONFIG_SND_SOC_TAS6424)	+= snd-soc-tas6424.o
- obj-$(CONFIG_SND_SOC_TDA7419)	+= snd-soc-tda7419.o
+ obj-$(CONFIG_SND_SOC_TAS675X)	+= snd-soc-tas675x.o

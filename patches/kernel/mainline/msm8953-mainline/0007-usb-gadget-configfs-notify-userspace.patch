@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Lee Jones <joneslee@google.com>
 Date: Tue, 6 Aug 2024 16:30:59 +0100
-Subject: ANDROID: usb: gadget: configfs: Add Uevent to notify userspace
+Subject: [PATCH] ANDROID: usb: gadget: configfs: Add Uevent to notify userspace
 
 Android userspace UsbDeviceManager relies on the uevents generated
 by the composition driver to generate user notifications. Therefore,
@@ -13,6 +13,11 @@ android_remove_function_device to remove them. Android UsbDeviceManager
 relies on communicating to the devices created by the gadget functions
 to implement functions such as midi.
 
+Source: https://android.googlesource.com/kernel/common-patches/+/95c6537fa2f92733e8b9fe23ab4ace2446070f41/android-mainline/ANDROID-usb-gadget-configfs-Add-Uevent-to-notify-userspace.patch
+License: GPL-2.0 (kernel sources)
+Adaptation: Rebased onto the ThinkSmart Linux 7.3 kernel.
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+
 Bug: 120441124
 Bug: 317149848
 Bug: 352124133
@@ -20,44 +25,10 @@ Change-Id: I471772a2514568dd7f2b2a0316a5f018b3b378ed
 Signed-off-by: Neill Kapron <nkapron@google.com>
 Signed-off-by: Elson Roy Serrao <quic_eserrao@quicinc.com>
 Signed-off-by: Lee Jones <joneslee@google.com>
----
- .../ABI/testing/sysfs-class-android_usb       |  16 +
- drivers/usb/gadget/Kconfig                    |  11 +
- drivers/usb/gadget/Makefile                   |   1 +
- drivers/usb/gadget/android_configfs_uevent.c  | 328 ++++++++++++++++++
- drivers/usb/gadget/android_configfs_uevent.h  | 150 ++++++++
- drivers/usb/gadget/composite.c                |   7 +
- drivers/usb/gadget/configfs.c                 |  24 +-
- include/linux/usb/android_configfs_uevent.h   |  58 ++++
- include/linux/usb/composite.h                 |   3 +
- 9 files changed, 597 insertions(+), 1 deletion(-)
- create mode 100644 Documentation/ABI/testing/sysfs-class-android_usb
- create mode 100644 drivers/usb/gadget/android_configfs_uevent.c
- create mode 100644 drivers/usb/gadget/android_configfs_uevent.h
- create mode 100644 include/linux/usb/android_configfs_uevent.h
 
-diff --git a/Documentation/ABI/testing/sysfs-class-android_usb b/Documentation/ABI/testing/sysfs-class-android_usb
-new file mode 100644
---- /dev/null
-+++ b/Documentation/ABI/testing/sysfs-class-android_usb
-@@ -0,0 +1,16 @@
-+Android USB devices (eg. /sys/class/android_usb/android0/)
-+
-+What:		/sys/class/android_usb/<android_device>/state
-+Date:		Feb 2024
-+Contact:	Neill Kapron <nkapron@google.com>
-+Description:
-+		The state of the USB connection. This attribute is likely
-+		redundant with the /sys/class/UDC/state attribute, and should
-+		be deprecated/removed when userspace can be refactored.
-+		Change on the state will also generate uevent KOBJ_CHANGE on
-+		the port with the new state included in the message as
-+		"USB_STATE=<STATE>". Note this is not the correct usage of
-+		uevents, but necessary due to the requirement to maintaine
-+		userspace API compatibility.
-+
-+		Valid values: CONNECTED, DISCONNECTED, CONFIGURED
+---
 diff --git a/drivers/usb/gadget/Kconfig b/drivers/usb/gadget/Kconfig
+index 76521555e3c14c29aa09f448168a6affc6bfa02a..56efb825b084751cbfda41f1ad1a9a222c569a9a 100644
 --- a/drivers/usb/gadget/Kconfig
 +++ b/drivers/usb/gadget/Kconfig
 @@ -237,6 +237,17 @@ config USB_CONFIGFS
@@ -79,6 +50,7 @@ diff --git a/drivers/usb/gadget/Kconfig b/drivers/usb/gadget/Kconfig
  	bool "Generic serial bulk in/out"
  	depends on USB_CONFIGFS
 diff --git a/drivers/usb/gadget/Makefile b/drivers/usb/gadget/Makefile
+index 33f1ef91b0464ffd16c614d714e21d6a3ce50f35..370b393032f41999432349a55991d2c65b02cebe 100644
 --- a/drivers/usb/gadget/Makefile
 +++ b/drivers/usb/gadget/Makefile
 @@ -8,5 +8,6 @@ subdir-ccflags-$(CONFIG_USB_GADGET_VERBOSE)	+= -DVERBOSE_DEBUG
@@ -88,8 +60,172 @@ diff --git a/drivers/usb/gadget/Makefile b/drivers/usb/gadget/Makefile
 +libcomposite-$(CONFIG_ANDROID_USB_CONFIGFS_UEVENT) += android_configfs_uevent.o
  
  obj-$(CONFIG_USB_GADGET)	+= udc/ function/ legacy/
+diff --git a/drivers/usb/gadget/composite.c b/drivers/usb/gadget/composite.c
+index df39e3487c1f3b03c7105f8933a7faf201bd6069..0fbcea72dc7feb20d0f42f8c746f9b9a5813675f 100644
+--- a/drivers/usb/gadget/composite.c
++++ b/drivers/usb/gadget/composite.c
+@@ -22,6 +22,7 @@
+ #include <linux/unaligned.h>
+ 
+ #include "u_os_desc.h"
++#include "android_configfs_uevent.h"
+ 
+ /**
+  * struct usb_os_string - represents OS String to be reported by a gadget
+@@ -941,6 +942,7 @@ static void reset_config(struct usb_composite_dev *cdev)
+ 		bitmap_zero(f->endpoints, 32);
+ 	}
+ 	cdev->config = NULL;
++	android_set_unconfigured(&cdev->android_opts);
+ 	cdev->delayed_status = 0;
+ }
+ 
+@@ -1765,6 +1767,8 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
+ 	struct usb_function		*iter;
+ 	u8				endp;
+ 
++	android_set_connected(&cdev->android_opts);
++
+ 	if (w_length > USB_COMP_EP0_BUFSIZ) {
+ 		if (ctrl->bRequestType & USB_DIR_IN) {
+ 			/* Cast away the const, we are going to overwrite on purpose. */
+@@ -1900,6 +1904,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
+ 		spin_lock(&cdev->lock);
+ 		value = set_config(cdev, ctrl, w_value);
+ 		spin_unlock(&cdev->lock);
++		android_set_configured(&cdev->android_opts);
+ 		break;
+ 	case USB_REQ_GET_CONFIGURATION:
+ 		if (ctrl->bRequestType != USB_DIR_IN)
+@@ -2290,6 +2295,8 @@ static void __composite_disconnect(struct usb_gadget *gadget)
+ 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
+ 	unsigned long			flags;
+ 
++	android_set_disconnected(&cdev->android_opts);
++
+ 	/* REVISIT:  should we have config and device level
+ 	 * disconnect callbacks?
+ 	 */
+diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
+index 51df6d1d1487afe018c46e4c62ee37c82602a9c3..40e9d08bb70d8f6f10f30023757cd26a8050dfac 100644
+--- a/drivers/usb/gadget/configfs.c
++++ b/drivers/usb/gadget/configfs.c
+@@ -11,6 +11,7 @@
+ #include <linux/usb/webusb.h>
+ #include "configfs.h"
+ #include "u_os_desc.h"
++#include "android_configfs_uevent.h"
+ 
+ static int check_user_usb_string(const char *name,
+ 		struct usb_gadget_strings *stringtab_dev)
+@@ -286,7 +287,11 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
+ 
+ 	mutex_lock(&gi->lock);
+ 
+-	if (!strlen(name)) {
++	/*
++	 * ANDROID: Not exactly sure why we need this "none", but worried it
++	 * would break something if removed.
++	 */
++	if (!strlen(name) || strcmp(name, "none") == 0) {
+ 		ret = unregister_gadget(gi);
+ 		if (ret)
+ 			goto err;
+@@ -2046,10 +2051,16 @@ static struct config_group *gadgets_make(
+ 	if (!gi->composite.gadget_driver.function)
+ 		goto out_free_driver_name;
+ 
++	if (android_device_create(&gi->cdev.android_opts))
++		goto out_free_driver_name_and_function;
++
+ 	return &gi->group;
+ 
+ out_free_driver_name:
+ 	kfree(gi->composite.gadget_driver.driver.name);
++out_free_driver_name_and_function:
++	kfree(gi->composite.gadget_driver.driver.name);
++	kfree(gi->composite.gadget_driver.function);
+ err:
+ 	kfree(gi);
+ 	return ERR_PTR(-ENOMEM);
+@@ -2057,6 +2068,10 @@ err:
+ 
+ static void gadgets_drop(struct config_group *group, struct config_item *item)
+ {
++	struct gadget_info *gi;
++
++	gi = container_of(to_config_group(item), struct gadget_info, group);
++	android_device_destroy(&gi->cdev.android_opts);
+ 	config_item_put(item);
+ }
+ 
+@@ -2096,7 +2111,13 @@ static int __init gadget_cfs_init(void)
+ 
+ 	config_group_init(&gadget_subsys.su_group);
+ 
++	ret = android_class_create();
++	if (ret)
++		return ret;
++
+ 	ret = configfs_register_subsystem(&gadget_subsys);
++	if (ret)
++		android_class_destroy();
+ 	return ret;
+ }
+ module_init(gadget_cfs_init);
+@@ -2104,5 +2125,6 @@ module_init(gadget_cfs_init);
+ static void __exit gadget_cfs_exit(void)
+ {
+ 	configfs_unregister_subsystem(&gadget_subsys);
++	android_class_destroy();
+ }
+ module_exit(gadget_cfs_exit);
+diff --git a/include/linux/usb/composite.h b/include/linux/usb/composite.h
+index c18041fafa5216abd51ebb3f692f8f13a04a712c..1e9b141852700b53c62fcbb31783923a6d5abed0 100644
+--- a/include/linux/usb/composite.h
++++ b/include/linux/usb/composite.h
+@@ -28,6 +28,7 @@
+ #include <linux/usb/webusb.h>
+ #include <linux/log2.h>
+ #include <linux/configfs.h>
++#include <linux/usb/android_configfs_uevent.h>
+ 
+ /*
+  * USB function drivers should return USB_GADGET_DELAYED_STATUS if they
+@@ -499,6 +500,8 @@ struct usb_composite_dev {
+ 	/* protects deactivations and delayed_status counts*/
+ 	spinlock_t			lock;
+ 
++	struct android_uevent_opts	android_opts;
++
+ 	/* public: */
+ 	unsigned int			setup_pending:1;
+ 	unsigned int			os_desc_pending:1;
+diff --git a/Documentation/ABI/testing/sysfs-class-android_usb b/Documentation/ABI/testing/sysfs-class-android_usb
+new file mode 100644
+index 0000000..3f8131e
+--- /dev/null
++++ b/Documentation/ABI/testing/sysfs-class-android_usb
+@@ -0,0 +1,16 @@
++Android USB devices (eg. /sys/class/android_usb/android0/)
++
++What:		/sys/class/android_usb/<android_device>/state
++Date:		Feb 2024
++Contact:	Neill Kapron <nkapron@google.com>
++Description:
++		The state of the USB connection. This attribute is likely
++		redundant with the /sys/class/UDC/state attribute, and should
++		be deprecated/removed when userspace can be refactored.
++		Change on the state will also generate uevent KOBJ_CHANGE on
++		the port with the new state included in the message as
++		"USB_STATE=<STATE>". Note this is not the correct usage of
++		uevents, but necessary due to the requirement to maintaine
++		userspace API compatibility.
++
++		Valid values: CONNECTED, DISCONNECTED, CONFIGURED
 diff --git a/drivers/usb/gadget/android_configfs_uevent.c b/drivers/usb/gadget/android_configfs_uevent.c
 new file mode 100644
+index 0000000..1092222
 --- /dev/null
 +++ b/drivers/usb/gadget/android_configfs_uevent.c
 @@ -0,0 +1,328 @@
@@ -423,6 +559,7 @@ new file mode 100644
 +EXPORT_SYMBOL_GPL(android_remove_function_device);
 diff --git a/drivers/usb/gadget/android_configfs_uevent.h b/drivers/usb/gadget/android_configfs_uevent.h
 new file mode 100644
+index 0000000..6a56efd
 --- /dev/null
 +++ b/drivers/usb/gadget/android_configfs_uevent.h
 @@ -0,0 +1,150 @@
@@ -576,126 +713,9 @@ new file mode 100644
 +}
 +#endif /* CONFIG_ANDROID_USB_CONFIGFS_UEVENT */
 +#endif /* __ANDROID_CONFIGFS_UEVENT_H */
-diff --git a/drivers/usb/gadget/composite.c b/drivers/usb/gadget/composite.c
---- a/drivers/usb/gadget/composite.c
-+++ b/drivers/usb/gadget/composite.c
-@@ -22,6 +22,7 @@
- #include <linux/unaligned.h>
- 
- #include "u_os_desc.h"
-+#include "android_configfs_uevent.h"
- 
- /**
-  * struct usb_os_string - represents OS String to be reported by a gadget
-@@ -941,6 +942,7 @@ static void reset_config(struct usb_composite_dev *cdev)
- 		bitmap_zero(f->endpoints, 32);
- 	}
- 	cdev->config = NULL;
-+	android_set_unconfigured(&cdev->android_opts);
- 	cdev->delayed_status = 0;
- }
- 
-@@ -1765,6 +1767,8 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
- 	struct usb_function		*iter;
- 	u8				endp;
- 
-+	android_set_connected(&cdev->android_opts);
-+
- 	if (w_length > USB_COMP_EP0_BUFSIZ) {
- 		if (ctrl->bRequestType & USB_DIR_IN) {
- 			/* Cast away the const, we are going to overwrite on purpose. */
-@@ -1899,6 +1903,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
- 		spin_lock(&cdev->lock);
- 		value = set_config(cdev, ctrl, w_value);
- 		spin_unlock(&cdev->lock);
-+		android_set_configured(&cdev->android_opts);
- 		break;
- 	case USB_REQ_GET_CONFIGURATION:
- 		if (ctrl->bRequestType != USB_DIR_IN)
-@@ -2286,6 +2291,8 @@ static void __composite_disconnect(struct usb_gadget *gadget)
- 	struct usb_composite_dev	*cdev = get_gadget_data(gadget);
- 	unsigned long			flags;
- 
-+	android_set_disconnected(&cdev->android_opts);
-+
- 	/* REVISIT:  should we have config and device level
- 	 * disconnect callbacks?
- 	 */
-diff --git a/drivers/usb/gadget/configfs.c b/drivers/usb/gadget/configfs.c
---- a/drivers/usb/gadget/configfs.c
-+++ b/drivers/usb/gadget/configfs.c
-@@ -11,6 +11,7 @@
- #include <linux/usb/webusb.h>
- #include "configfs.h"
- #include "u_os_desc.h"
-+#include "android_configfs_uevent.h"
- 
- static int check_user_usb_string(const char *name,
- 		struct usb_gadget_strings *stringtab_dev)
-@@ -286,7 +287,11 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
- 
- 	mutex_lock(&gi->lock);
- 
--	if (!strlen(name)) {
-+	/*
-+	 * ANDROID: Not exactly sure why we need this "none", but worried it
-+	 * would break something if removed.
-+	 */
-+	if (!strlen(name) || strcmp(name, "none") == 0) {
- 		ret = unregister_gadget(gi);
- 		if (ret)
- 			goto err;
-@@ -2047,10 +2052,16 @@ static struct config_group *gadgets_make(
- 	if (!gi->composite.gadget_driver.function)
- 		goto out_free_driver_name;
- 
-+	if (android_device_create(&gi->cdev.android_opts))
-+		goto out_free_driver_name_and_function;
-+
- 	return &gi->group;
- 
- out_free_driver_name:
- 	kfree(gi->composite.gadget_driver.driver.name);
-+out_free_driver_name_and_function:
-+	kfree(gi->composite.gadget_driver.driver.name);
-+	kfree(gi->composite.gadget_driver.function);
- err:
- 	kfree(gi);
- 	return ERR_PTR(-ENOMEM);
-@@ -2058,6 +2069,10 @@ static struct config_group *gadgets_make(
- 
- static void gadgets_drop(struct config_group *group, struct config_item *item)
- {
-+	struct gadget_info *gi;
-+
-+	gi = container_of(to_config_group(item), struct gadget_info, group);
-+	android_device_destroy(&gi->cdev.android_opts);
- 	config_item_put(item);
- }
- 
-@@ -2097,7 +2112,13 @@ static int __init gadget_cfs_init(void)
- 
- 	config_group_init(&gadget_subsys.su_group);
- 
-+	ret = android_class_create();
-+	if (ret)
-+		return ret;
-+
- 	ret = configfs_register_subsystem(&gadget_subsys);
-+	if (ret)
-+		android_class_destroy();
- 	return ret;
- }
- module_init(gadget_cfs_init);
-@@ -2105,5 +2126,6 @@ module_init(gadget_cfs_init);
- static void __exit gadget_cfs_exit(void)
- {
- 	configfs_unregister_subsystem(&gadget_subsys);
-+	android_class_destroy();
- }
- module_exit(gadget_cfs_exit);
 diff --git a/include/linux/usb/android_configfs_uevent.h b/include/linux/usb/android_configfs_uevent.h
 new file mode 100644
+index 0000000..07b82dd
 --- /dev/null
 +++ b/include/linux/usb/android_configfs_uevent.h
 @@ -0,0 +1,58 @@
@@ -757,23 +777,3 @@ new file mode 100644
 +}
 +#endif /* CONFIG_ANDROID_USB_CONFIGFS_UEVENT */
 +#endif /* _ANDROID_USB_CONFIGFS_UEVENT_H */
-diff --git a/include/linux/usb/composite.h b/include/linux/usb/composite.h
---- a/include/linux/usb/composite.h
-+++ b/include/linux/usb/composite.h
-@@ -28,6 +28,7 @@
- #include <linux/usb/webusb.h>
- #include <linux/log2.h>
- #include <linux/configfs.h>
-+#include <linux/usb/android_configfs_uevent.h>
- 
- /*
-  * USB function drivers should return USB_GADGET_DELAYED_STATUS if they
-@@ -499,6 +500,8 @@ struct usb_composite_dev {
- 	/* protects deactivations and delayed_status counts*/
- 	spinlock_t			lock;
- 
-+	struct android_uevent_opts	android_opts;
-+
- 	/* public: */
- 	unsigned int			setup_pending:1;
- 	unsigned int			os_desc_pending:1;

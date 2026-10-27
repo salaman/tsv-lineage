@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
+Subject: [PATCH] media: only enable the FFmpeg codec configuration when selected
+
+The FFmpeg prebuilt unconditionally exports a vendor/etc/media_codecs_c2.xml
+install rule, even when the product selects v4l2_codec2 instead. This conflicts
+with the V4L2 example or a device-specific codec configuration during Kati
+generation. Enable the prebuilt only alongside the FFmpeg product packages.
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_device_mainline_common
+License: Apache-2.0 (modified upstream sources)
+Base-commit: f49f55117276cc2603fd7f6aeb78b859535f8e8d
+Apply in filename order within this project.
+
+---
+diff --git a/optional/media-c2-hal_ffmpeg/Android.bp b/optional/media-c2-hal_ffmpeg/Android.bp
+--- a/optional/media-c2-hal_ffmpeg/Android.bp
++++ b/optional/media-c2-hal_ffmpeg/Android.bp
+@@ -5,6 +5,10 @@
+ 
+ prebuilt_etc {
+     name: "media_codecs_ffmpeg_c2.xml",
++    enabled: select(soong_config_variable("mainline_common_ffmpeg", "enabled"), {
++        true: true,
++        default: false,
++    }),
+     filename: "media_codecs_c2.xml",
+     src: "media_codecs_ffmpeg_c2.xml",
+     vendor: true,
+diff --git a/optional/media-c2-hal_ffmpeg/product.mk b/optional/media-c2-hal_ffmpeg/product.mk
+--- a/optional/media-c2-hal_ffmpeg/product.mk
++++ b/optional/media-c2-hal_ffmpeg/product.mk
+@@ -5,6 +5,8 @@
+ 
+ ifeq ($(TARGET_MEDIA_C2_HAL),ffmpeg)
+ 
++$(call soong_config_set_bool,mainline_common_ffmpeg,enabled,true)
++
+ PRODUCT_PACKAGES += \
+     com.android.hardware.media.c2.ffmpeg
+ 

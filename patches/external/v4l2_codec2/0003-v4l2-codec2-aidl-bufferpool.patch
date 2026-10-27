@@ -1,11 +1,16 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alessandro Fontana <alessandro.fontana@pm.me>
+Date: Fri, 2 Oct 2026 12:18:27 +0200
 Subject: [PATCH] codec2: accept AIDL buffer-pool blocks in VideoFramePool
 
 Recognize the AIDL buffer-pool allocation used by Android 16 instead of rejecting it as an unknown block. Keep the existing HIDL path available and add the corresponding build dependency.
 
 Origin: https://github.com/chaoscalm/gtaxlwifi-lineageos/blob/5e58effbe006f7876d07cbe89a4f071da19ab909/patches/external_v4l2_codec2/0008-VideoFramePool-Accept-AIDL-BufferPool-blocks.patch
 Adaptation: ThinkSmart View LineageOS 23.2
-Base-commit: 16700e04214451441a1f7f5523b69848efb1f028
+Base-commit: 6685af1c65467d0b550d7b904418f65059bc3cbb
 Apply in filename order within this project.
+
+Change-Id: I88dc8581f00c9f916908a4be9bcf073a0918d902
 
 ---
 diff --git a/components/Android.bp b/components/Android.bp

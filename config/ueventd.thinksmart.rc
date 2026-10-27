@@ -1,1 +1,2 @@
 /dev/iio:device* 0660 system system
+/sys/class/backlight/backlight bl_power 0660 system system

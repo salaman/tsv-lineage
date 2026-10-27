@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: "Isaac J. Manjarres" <isaacmanjarres@google.com>
 Date: Tue, 28 Jan 2025 14:44:53 -0800
-Subject: ANDROID: mm/memfd-ashmem-shim: Introduce shim layer
+Subject: [PATCH] ANDROID: mm/memfd-ashmem-shim: Introduce shim layer
 
 Certain applications treat any shared memory buffer that they obtain
 as an ashmem buffer, meaning that they will attempt to invoke ashmem
@@ -20,6 +20,11 @@ This also folds in the following commits from the android14-6.1 branch:
 1. ANDROID: mm/memfd-ashmem-shim: Fix variable length array usage
 2. ANDROID: mm/memfd-ashmem-shim: Simplify buffer name retrieval
 
+Source: https://android.googlesource.com/kernel/common-patches/+/95c6537fa2f92733e8b9fe23ab4ace2446070f41/android-mainline/ANDROID-mm-memfd-ashmem-shim-Introduce-shim-layer.patch
+License: GPL-2.0 (kernel sources)
+Adaptation: Rebased onto Linux 7.3; shmem wiring is a separate local adaptation.
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+
 Bug: 111903542
 Bug: 415769373
 Change-Id: I268a29ee2805739550d79fd2c21d3cfb5a852642
@@ -27,21 +32,13 @@ Change-Id: I268a29ee2805739550d79fd2c21d3cfb5a852642
 and folded in fixes/simplifications that were merged into the
 android14-6.1 branch after the initial commit landed.]
 Signed-off-by: Isaac J. Manjarres <isaacmanjarres@google.com>
----
- mm/Kconfig                      |  11 ++
- mm/Makefile                     |   1 +
- mm/memfd-ashmem-shim-internal.h |  52 ++++++++
- mm/memfd-ashmem-shim.c          | 213 ++++++++++++++++++++++++++++++++
- mm/memfd-ashmem-shim.h          |  21 ++++
- 5 files changed, 298 insertions(+)
- create mode 100644 mm/memfd-ashmem-shim-internal.h
- create mode 100644 mm/memfd-ashmem-shim.c
- create mode 100644 mm/memfd-ashmem-shim.h
 
+---
 diff --git a/mm/Kconfig b/mm/Kconfig
+index 604c58199acbf87fa555d52d8a0309e79b203641..d350e3331f28cfb6ae96c0bb971a049ac0b70945 100644
 --- a/mm/Kconfig
 +++ b/mm/Kconfig
-@@ -1240,6 +1240,17 @@ config KMAP_LOCAL_NON_LINEAR_PTE_ARRAY
+@@ -1341,6 +1341,17 @@ config KMAP_LOCAL_NON_LINEAR_PTE_ARRAY
  config MEMFD_CREATE
  	bool "Enable memfd_create() system call" if EXPERT
  
@@ -60,9 +57,10 @@ diff --git a/mm/Kconfig b/mm/Kconfig
  	default y
  	bool "Enable memfd_secret() system call" if EXPERT
 diff --git a/mm/Makefile b/mm/Makefile
+index e7245cb88c665172b2c4372d0eee2b9822bfecf1..1aef2124ebae7317b0a654c3f5d659b3c1e8fc81 100644
 --- a/mm/Makefile
 +++ b/mm/Makefile
-@@ -137,6 +137,7 @@ obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
+@@ -139,6 +139,7 @@ obj-$(CONFIG_PERCPU_STATS) += percpu-stats.o
  obj-$(CONFIG_ZONE_DEVICE) += memremap.o
  obj-$(CONFIG_HMM_MIRROR) += hmm.o
  obj-$(CONFIG_MEMFD_CREATE) += memfd.o
@@ -72,6 +70,7 @@ diff --git a/mm/Makefile b/mm/Makefile
  obj-$(CONFIG_PAGE_REPORTING) += page_reporting.o
 diff --git a/mm/memfd-ashmem-shim-internal.h b/mm/memfd-ashmem-shim-internal.h
 new file mode 100644
+index 0000000..b499434
 --- /dev/null
 +++ b/mm/memfd-ashmem-shim-internal.h
 @@ -0,0 +1,52 @@
@@ -129,6 +128,7 @@ new file mode 100644
 +#endif /* _MM_MEMFD_ASHMEM_SHIM_INTERNAL_H */
 diff --git a/mm/memfd-ashmem-shim.c b/mm/memfd-ashmem-shim.c
 new file mode 100644
+index 0000000..258498c
 --- /dev/null
 +++ b/mm/memfd-ashmem-shim.c
 @@ -0,0 +1,213 @@
@@ -347,6 +347,7 @@ new file mode 100644
 +#endif
 diff --git a/mm/memfd-ashmem-shim.h b/mm/memfd-ashmem-shim.h
 new file mode 100644
+index 0000000..026789b
 --- /dev/null
 +++ b/mm/memfd-ashmem-shim.h
 @@ -0,0 +1,21 @@

@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
+Subject: [PATCH] libcutils: validate sandboxed memfds through the ashmem shim
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_system_core
+Base-commit: 65d661b1a536701e8b118be4e9728d7b5ca727c9
+
+Android 17 requires memfds to carry both size seals before treating them as
+ashmem. Preserve that check when a sandbox denies proc-fd readlink access:
+the Android memfd/ashmem ioctl shim can validate the kernel memfd name
+convention without a pathname lookup.
+
+Only use the fallback for EPERM/EACCES and require ASHMEM_GET_NAME success
+as well as F_GET_SEALS with F_SEAL_GROW and F_SEAL_SHRINK. GET_SIZE alone
+is not an identity check. The shim checks the kernel dentry's memfd:
+prefix; the kernel seal query additionally rejects non-shmem/hugetlb
+files. Ordinary tmpfs inodes start with F_SEAL_SEAL, so a user-created
+file with a forged memfd: basename cannot acquire the required size seals.
+Kernels without the shim, or sandboxes denying the ioctl, fail closed.
+The original readlink failure remains logged.
+
+Add child-only, bounded seccomp regressions for readlink denial and for
+denial of both readlink and the identity ioctl. Check a properly sealed
+memfd, unsealed/partially sealed memfds, an ordinary file, a character
+device, a pipe, and an invalid fd; verify that seals and resize protection
+are unchanged.
+
+
+--- a/libcutils/ashmem-dev.cpp
++++ b/libcutils/ashmem-dev.cpp
+@@ -23,6 +23,7 @@
+ #include <linux/ashmem.h>
+ #include <linux/memfd.h>
+ #include <log/log.h>
++#include <string.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
+ #include <sys/stat.h>
+@@ -198,11 +199,17 @@
+     std::string fd_path = android::base::StringPrintf("/proc/self/fd/%d", fd);
+     std::string result;
+     if (!android::base::Readlink(fd_path, &result)) {
+-        ALOGE("readlink(%s) failed: %m", fd_path.c_str());
+-        return false;
+-    }
+-
+-    if (!result.starts_with("/memfd:")) {
++        const int saved_errno = errno;
++        ALOGE("readlink(%s) failed: %s", fd_path.c_str(), strerror(saved_errno));
++        // Sandboxes may deny proc symlink access. The Android memfd/ashmem shim's
++        // GET_NAME checks the kernel's memfd name convention, unlike GET_SIZE.
++        // This identity check must still be combined with both size seals below.
++        char name[ASHMEM_NAME_LEN];
++        if ((saved_errno != EPERM && saved_errno != EACCES) ||
++            TEMP_FAILURE_RETRY(ioctl(fd, ASHMEM_GET_NAME, name)) != 0) {
++            return false;
++        }
++    } else if (!result.starts_with("/memfd:")) {
+         return false;
+     }
+ 
+--- a/libcutils/ashmem_test.cpp
++++ b/libcutils/ashmem_test.cpp
+@@ -15,13 +15,22 @@
+  */
+ 
+ #include <errno.h>
++#include <fcntl.h>
++#include <linux/filter.h>
+ #include <linux/fs.h>
++#include <linux/seccomp.h>
++#include <signal.h>
++#include <stddef.h>
+ #include <stdint.h>
+ #include <string.h>
+ #include <sys/mman.h>
++#include <sys/prctl.h>
++#include <sys/syscall.h>
+ #include <sys/types.h>
++#include <sys/wait.h>
+ #include <unistd.h>
+ 
++#include <iterator>
+ #include <vector>
+ 
+ #include <android-base/macros.h>
+@@ -575,4 +584,113 @@
+     ASSERT_TRUE(fd2 >= 0);
+     ASSERT_EQ(fcntl(fd2, F_ADD_SEALS, F_SEAL_SHRINK), 0);
+     ASSERT_FALSE(ashmem_valid(fd2));
++}
++
++static void TestReadlinkDeniedMemfdValidity(bool deny_name_ioctl) {
++    unique_fd valid(__memfd_create_region("ashmem-valid", getpagesize()));
++    ASSERT_GE(valid.get(), 0);
++    char name[ASHMEM_NAME_LEN] = {};
++    if (ioctl(valid.get(), ASHMEM_GET_NAME, name) != 0) {
++        GTEST_SKIP() << "Requires the Android memfd/ashmem ioctl compatibility shim";
++    }
++    ASSERT_STREQ("ashmem-valid", name);
++    ASSERT_TRUE(ashmem_valid(valid));
++    const int seals = fcntl(valid, F_GET_SEALS);
++    ASSERT_EQ(F_SEAL_GROW | F_SEAL_SHRINK, seals & (F_SEAL_GROW | F_SEAL_SHRINK));
++
++    unique_fd unsealed(memfd_create("unsealed", MFD_CLOEXEC | MFD_ALLOW_SEALING));
++    unique_fd grow_only(memfd_create("grow-only", MFD_CLOEXEC | MFD_ALLOW_SEALING));
++    unique_fd shrink_only(memfd_create("shrink-only", MFD_CLOEXEC | MFD_ALLOW_SEALING));
++    unique_fd ordinary(open("/proc/self/exe", O_RDONLY | O_CLOEXEC));
++    unique_fd device(open("/dev/null", O_RDONLY | O_CLOEXEC));
++    ASSERT_GE(unsealed.get(), 0);
++    ASSERT_GE(grow_only.get(), 0);
++    ASSERT_GE(shrink_only.get(), 0);
++    ASSERT_GE(ordinary.get(), 0);
++    ASSERT_GE(device.get(), 0);
++    ASSERT_EQ(0, fcntl(grow_only, F_ADD_SEALS, F_SEAL_GROW));
++    ASSERT_EQ(0, fcntl(shrink_only, F_ADD_SEALS, F_SEAL_SHRINK));
++    int pipe_fds[2];
++    ASSERT_EQ(0, pipe2(pipe_fds, O_CLOEXEC));
++    unique_fd pipe_read(pipe_fds[0]);
++    unique_fd pipe_write(pipe_fds[1]);
++    const int invalid_fds[] = {
++            unsealed.get(), grow_only.get(), shrink_only.get(), ordinary.get(),
++            device.get(), pipe_read.get(), pipe_write.get(), -1,
++    };
++    for (int fd : invalid_fds) {
++        ASSERT_FALSE(ashmem_valid(fd)) << fd;
++    }
++
++    pid_t child = fork();
++    ASSERT_GE(child, 0);
++    if (child == 0) {
++        alarm(5);
++        const auto run = [&]() -> int {
++            const sock_filter filter[] = {
++                    BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
++                    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_readlinkat, 0, 1),
++                    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
++#ifdef __NR_readlink
++                    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_readlink, 0, 1),
++                    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
++#endif
++                    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
++            };
++            const sock_fprog program = {
++                    static_cast<unsigned short>(std::size(filter)),
++                    const_cast<sock_filter*>(filter),
++            };
++            if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
++                prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) != 0) {
++                return 1;
++            }
++            const sock_filter ioctl_filter[] = {
++                    BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
++                    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_ioctl, 0, 3),
++                    BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, args[1])),
++                    BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ASHMEM_GET_NAME, 0, 1),
++                    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
++                    BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
++            };
++            const sock_fprog ioctl_program = {
++                    static_cast<unsigned short>(std::size(ioctl_filter)),
++                    const_cast<sock_filter*>(ioctl_filter),
++            };
++            if (deny_name_ioctl &&
++                prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &ioctl_program) != 0) {
++                return 2;
++            }
++            char target[128];
++            errno = 0;
++            if (readlink("/proc/self/fd/0", target, sizeof(target)) != -1 || errno != EPERM) {
++                return 3;
++            }
++            if (ashmem_valid(valid) != !deny_name_ioctl) {
++                return 4;
++            }
++            for (int fd : invalid_fds) {
++                if (ashmem_valid(fd)) return 5;
++            }
++            if (fcntl(valid, F_GET_SEALS) != seals) return 6;
++            errno = 0;
++            if (ftruncate(valid, getpagesize() + 1) != -1 || errno != EPERM) return 7;
++            errno = 0;
++            if (ftruncate(valid, getpagesize() - 1) != -1 || errno != EPERM) return 8;
++            return 0;
++        };
++        _exit(run());
++    }
++    int status;
++    ASSERT_EQ(child, TEMP_FAILURE_RETRY(waitpid(child, &status, 0)));
++    ASSERT_TRUE(WIFEXITED(status)) << status;
++    ASSERT_EQ(0, WEXITSTATUS(status));
++}
++
++TEST(AshmemValidTest, ReadlinkDeniedMemfdTest) {
++    TestReadlinkDeniedMemfdValidity(false);
++}
++
++TEST(AshmemValidTest, ReadlinkAndNameDeniedMemfdTest) {
++    TestReadlinkDeniedMemfdValidity(true);
+ }
+\ No newline at end of file

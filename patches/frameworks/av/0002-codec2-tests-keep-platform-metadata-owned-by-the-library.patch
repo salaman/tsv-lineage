@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 23:41:26 -0700
+Subject: [PATCH] codec2: keep platform metadata owned by the library in tests
+
+C2SampleComponent_test enables __C2_GENERATE_GLOBAL_VARS__ before including
+the platform headers. This emits the platform _FIELD_LIST vectors in the
+test executable as well as in libcodec2_vndk. Symbol interposition causes
+both initializers and exit destructors to operate on the same vectors,
+leading to a Scudo double-free abort even when the test filter runs no tests.
+
+Include platform types before enabling metadata generation, keeping the
+macro enabled for the sample enum and struct declared by the test itself.
+This preserves normal library and process teardown.
+
+Origin: Local ThinkSmart View port
+Base-commit: 937eb9047ec2f88620f1f6a4d9e407f6c869d91a
+Apply in filename order within this project.
+
+---
+diff --git a/media/codec2/tests/C2SampleComponent_test.cpp b/media/codec2/tests/C2SampleComponent_test.cpp
+--- a/media/codec2/tests/C2SampleComponent_test.cpp
++++ b/media/codec2/tests/C2SampleComponent_test.cpp
+@@ -19,7 +19,6 @@
+ 
+ #include <gtest/gtest.h>
+ 
+-#define __C2_GENERATE_GLOBAL_VARS__
+ #include <C2Component.h>
+ #include <C2Config.h>
+ #include <C2Debug.h>
+@@ -27,6 +26,9 @@
+ 
+ #include <unordered_map>
+ 
++// Platform descriptors are owned by libcodec2_vndk, not this test executable.
++#define __C2_GENERATE_GLOBAL_VARS__
++
+ class C2SampleComponentTest : public ::testing::Test {
+ };
+ 

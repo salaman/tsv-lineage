@@ -1,3 +1,6 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo: preserve simplefb clocks
 
 lk2nd can hand over an actively scanning framebuffer, but the dynamically
@@ -15,16 +18,13 @@ references. lk2nd reuses this node, supplies its relocated memory and mode
 information, and enables it. The simplefb driver releases the clock
 references when DRM removes the firmware framebuffer.
 
----
- arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 15 +++++++++++++++
- 1 file changed, 15 insertions(+)
-
 Origin: Local ThinkSmart View port
-Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
-Apply in filename order within this project.
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 
 ---
 diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index bf7c2f2219ec41fbaf584b13dbd2d43a67d2a332..1adeb2706bf18ef46ffc4bb59c8cd9be95eee5cc 100644
 --- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 +++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 @@ -25,6 +25,21 @@

@@ -1,9 +1,13 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] codec2: support stateful startup and SPS visible dimensions
 
 Use explicit unknown coded dimensions and defer CAPTURE setup until SOURCE_CHANGE when the driver requires parsed headers. Parse AVC/HEVC SPS display cropping separately from coded allocation dimensions, with bounds checks and parser regressions.
 
 Origin: Local ThinkSmart View port
-Base-commit: 16700e04214451441a1f7f5523b69848efb1f028
+Source: https://github.com/LineageOS/android_external_v4l2_codec2
+Base-commit: 6685af1c65467d0b550d7b904418f65059bc3cbb
 Apply in filename order within this project.
 
 ---

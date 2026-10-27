@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Mon, 26 Oct 2026 05:41:00 +0000
+Subject: [PATCH] scripts: sign-file: finalize the signer with BoringSSL
+
+The LineageOS kernel host tools link sign-file against BoringSSL. Its
+CMS_add1_signer() rejects CMS_PARTIAL, which requests configuring the
+signer in multiple steps. sign-file does not perform that configuration;
+it supplies the certificate, key and digest together.
+
+Keep CMS_PARTIAL when creating the SignedData, but clear it when adding
+the complete signer. This retains the detached, attribute-free module
+signature format and allows CONFIG_MODULE_SIG_ALL to work without
+replacing the Android host toolchain or disabling module verification.
+
+Source: local integration fix for LineageOS 24 kernel host tools.
+Base: msm8953-mainline/linux 755ffc44d5d8442adeec8bbaa02108478089c4d7.
+---
+ scripts/sign-file.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/scripts/sign-file.c b/scripts/sign-file.c
+--- a/scripts/sign-file.c
++++ b/scripts/sign-file.c
+@@ -287,7 +287,8 @@ int main(int argc, char **argv)
+ 		cms = CMS_sign(NULL, NULL, NULL, NULL, flags);
+ 		ERR(!cms, "CMS_sign");
+ 
+-		ERR(!CMS_add1_signer(cms, x509, private_key, digest_algo, flags),
++		ERR(!CMS_add1_signer(cms, x509, private_key, digest_algo,
++				     flags & ~CMS_PARTIAL),
+ 		    "CMS_add1_signer");
+ 		ERR(CMS_final(cms, bm, NULL, flags) != 1,
+ 		    "CMS_final");
+-- 
+2.51.0

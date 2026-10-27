@@ -6,7 +6,8 @@
  * TAS5782M at I2C bus 1 address 0x49 (DT: "1-0049").
  *
  * Adapted from rickx/ubuntu-thinksmart and Kacper Adler's postmarketOS
- * submission; see PROVENANCE.md in the device tree for revisions and changes.
+ * submission; see drivers/tas5782m/README.md in the device tree for revisions
+ * and changes.
  * Requires board DSP tuning and bounds digital volume by its configured level.
  * DSP updates use TI SLASEG8A's coefficient-swap protocol with checked I/O.
  *

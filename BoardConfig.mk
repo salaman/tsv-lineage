@@ -2,6 +2,9 @@ DEVICE_PATH := device/lenovo/thinksmart
 include device/mainline/qcom-common/BoardConfigMainlineQcomCommon.mk
 $(call soong_config_set,mainline_qcom_common_soc,primary_audio_policy_configuration_variant,none)
 
+# Resolve only the fallback, not the namespace's duplicate Cuttlefish binaries.
+BOARD_WPA_SUPPLICANT_PRIVATE_LIB := //external/wpa_supplicant_8/wpa_supplicant/wpa_supplicant:lib_driver_cmd_fallback
+
 TARGET_BOOTLOADER_BOARD_NAME := CD-18781Y
 AB_OTA_UPDATER := false
 BOARD_AVB_ENABLE := false
@@ -41,6 +44,7 @@ BOARD_KERNEL_CMDLINE := \
     androidboot.hardware=thinksmart \
     androidboot.verifiedbootstate=orange \
     panic=0 \
+    lk2nd.pass-simplefb=relocate,autorefresh \
     console=tty0
 
 BOARD_MESA3D_VULKAN_DRIVERS :=

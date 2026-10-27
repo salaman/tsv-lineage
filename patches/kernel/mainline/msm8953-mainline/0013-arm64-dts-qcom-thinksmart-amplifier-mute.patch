@@ -1,11 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] arm64: dts: qcom: expose ThinkSmart amplifier mute GPIO
 
 Use the standard plural GPIO property consumed by the codec driver so it
 can control the connected mute line. Preserve the board's existing polarity.
 
-Origin: ThinkSmart View port; see PROVENANCE.md
+Origin: Local ThinkSmart View port
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+Related codec-source credits: drivers/tas5782m/README.md in the device tree.
+
 
 ---
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index da70c94a9c35c80495e9e6582469e86d8f468281..82a5a6de6d000ed3664ea0796715717d028c555b 100644
 --- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 +++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 @@ -269,8 +269,8 @@

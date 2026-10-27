@@ -1,3 +1,6 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] i2c: qup: wait for clock readiness before pausing v2 transfers
 
 The FIFO write completion path accepts OUTPUT_SERVICE before OUTPUT_DONE
@@ -13,16 +16,13 @@ This is a candidate for the ThinkSmart's initial write/read stall. Keep
 the existing transfer-timeout snapshot so unsuccessful trials retain
 their controller state.
 
----
- drivers/i2c/busses/i2c-qup.c | 38 ++++++++++++++++++++++++++++++++++++++
- 1 file changed, 38 insertions(+)
-
 Origin: Local ThinkSmart View port
-Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
-Apply in filename order within this project.
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 
 ---
 diff --git a/drivers/i2c/busses/i2c-qup.c b/drivers/i2c/busses/i2c-qup.c
+index ee7915ee2ba2f0883129871408a414b1ea2e95bd..8b72c33ea93dfb1ff750eb3b792f1e0a85c00921 100644
 --- a/drivers/i2c/busses/i2c-qup.c
 +++ b/drivers/i2c/busses/i2c-qup.c
 @@ -7,6 +7,7 @@
@@ -52,7 +52,7 @@ diff --git a/drivers/i2c/busses/i2c-qup.c b/drivers/i2c/busses/i2c-qup.c
  #define I2C_STATUS_ERROR_MASK		0x38000fc
  #define QUP_STATUS_ERROR_FLAGS		0x7c
  
-@@ -1383,6 +1389,34 @@ static void qup_i2c_write_tx_fifo_v2(struct qup_i2c_dev *qup)
+@@ -1363,6 +1369,34 @@ send_last_word:
  	writel(blk->tx_fifo_data, qup->base + QUP_OUT_FIFO_BASE);
  }
  
@@ -87,7 +87,7 @@ diff --git a/drivers/i2c/busses/i2c-qup.c b/drivers/i2c/busses/i2c-qup.c
  /*
   * Main transfer function which read or write i2c data.
   * The QUP v2 supports reconfiguration during run in which multiple i2c sub
-@@ -1448,6 +1482,10 @@ qup_i2c_conf_xfer_v2(struct qup_i2c_dev *qup, bool is_rx, bool is_first,
+@@ -1438,6 +1472,10 @@ qup_i2c_conf_xfer_v2(struct qup_i2c_dev *qup, bool is_rx, bool is_first,
  
  	/* Move to pause state for all the transfers, except last one */
  	if (change_pause_state) {

@@ -1,3 +1,6 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] drm/msm/dpu: discard completed frame flush state before video cleanup
 
 Video encoder disable leaves the last completed frame's software flush mask
@@ -16,14 +19,17 @@ interface and auxiliary-block flush mask. Leave the hardware completion
 predicate, genuine timeout handling and normal plane selection unchanged.
 
 Origin: Local ThinkSmart View port
-Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 Apply in filename order within this project.
+
 
 ---
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+index ba810f26ea3099106aac1783f7f6bf5e014e41a0..1df8e5d82795a97f99718db75197bc8421873fe4 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
-@@ -677,6 +677,9 @@ static void dpu_encoder_phys_vid_disable(struct dpu_encoder_phys *phys_enc)
+@@ -645,6 +645,9 @@ static void dpu_encoder_phys_vid_disable(struct dpu_encoder_phys *phys_enc)
  		}
  	}
  

@@ -1,4 +1,6 @@
-From: ThinkSmart local build <thinksmart@localhost>
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo: disable unused IPA
 
 The ThinkSmart View has no cellular modem. Its board description
@@ -9,19 +11,20 @@ Disable this unused modem packet accelerator on the board. Otherwise,
 without the IPA-lite driver, it prevents the interconnect providers
 from completing sync_state and releasing their initial bandwidth
 floors. Wi-Fi uses a separate SDIO interface and does not need IPA.
----
- arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 4 ++++
- 1 file changed, 4 insertions(+)
 
 Origin: Local ThinkSmart View port
-Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
-Apply in filename order within this project.
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 
 ---
 diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index 1adeb2706bf18ef46ffc4bb59c8cd9be95eee5cc..da70c94a9c35c80495e9e6582469e86d8f468281 100644
 --- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 +++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
-@@ -735,3 +735,7 @@
+@@ -732,6 +732,10 @@
+ 	status = "enabled";
+ };
+ 
 +&ipa {
 +	status = "disabled";
 +};

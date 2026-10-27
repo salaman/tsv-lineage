@@ -1,20 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <project name="LineageOS/android_device_mainline_common" path="device/mainline/common" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_device_mainline_qcom-common" path="device/mainline/qcom-common" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_hardware_mainline_common" path="hardware/mainline/common" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_hardware_mainline_qcom" path="hardware/mainline/qcom" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_kernel_mainline_configs" path="kernel/mainline/configs" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_drm_hwcomposer-upstream" path="external/drm_hwcomposer-upstream" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_libdisplay-info-upstream" path="external/libdisplay-info-upstream" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_minigbm-upstream" path="external/minigbm-upstream" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_mesa" path="external/mesa" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_prebuilts_mesa-build-dep" path="prebuilts/mesa-build-dep" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_linux-firmware-mainline" path="external/linux-firmware-mainline" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_external_tinyhal" path="external/tinyhal" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_hardware_sony_timekeep" path="hardware/sony/timekeep" remote="github" revision="lineage-23.2" />
-  <project name="LineageOS/android_hardware_linaro_libpm" path="hardware/linaro/libpm" remote="github" revision="d062161c81d3d2b61b27425c2e39c728eab7f9f0" upstream="refs/heads/lineage-23.2" clone-depth="1" />
-  <project name="LineageOS/android_hardware_intel_sensors-iio" path="hardware/intel/sensors-iio" remote="github" revision="b5134567f8b8bce819b3686d045acfc120e0159f" upstream="refs/heads/lineage-23.2" clone-depth="1" />
-  <project name="LineageOS/android_external_lk2nd" path="external/lk2nd" remote="github" revision="lineage-23.2" />
-  <project name="msm8953-mainline/linux" path="kernel/mainline/msm8953-mainline" remote="github" revision="7213855948c70fd165356526f1de1c3b6bf4d554" upstream="refs/heads/barni2000/7.1.3/develop" clone-depth="1" />
+  <project name="LineageOS/android_device_mainline_common" path="device/mainline/common" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_device_mainline_qcom-common" path="device/mainline/qcom-common" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_hardware_mainline_common" path="hardware/mainline/common" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_hardware_mainline_qcom" path="hardware/mainline/qcom" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_kernel_mainline_configs" path="kernel/mainline/configs" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_vendor_mainline" path="vendor/mainline" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_alsa-lib" path="external/alsa-lib" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_alsa-ucm-conf" path="external/alsa-ucm-conf" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_drm_hwcomposer-upstream" path="external/drm_hwcomposer-upstream" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_libdisplay-info-upstream" path="external/libdisplay-info-upstream" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_minigbm-upstream" path="external/minigbm-upstream" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_mesa" path="external/mesa" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_prebuilts_mesa-build-dep" path="prebuilts/mesa-build-dep" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_linux-firmware-mainline" path="external/linux-firmware-mainline" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_external_tinyhal" path="external/tinyhal" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_hardware_sony_timekeep" path="hardware/sony/timekeep" remote="github" revision="lineage-24.0" />
+  <project name="LineageOS/android_hardware_linaro_libpm" path="hardware/linaro/libpm" remote="github" revision="d062161c81d3d2b61b27425c2e39c728eab7f9f0" upstream="refs/heads/lineage-24.0" clone-depth="1" />
+  <project name="LineageOS/android_hardware_intel_sensors-iio" path="hardware/intel/sensors-iio" remote="github" revision="b5134567f8b8bce819b3686d045acfc120e0159f" upstream="refs/heads/lineage-24.0" clone-depth="1" />
+  <project name="LineageOS/android_external_lk2nd" path="external/lk2nd" remote="github" revision="lineage-24.0" />
+  <project name="msm8953-mainline/linux" path="kernel/mainline/msm8953-mainline" remote="github" revision="755ffc44d5d8442adeec8bbaa02108478089c4d7" upstream="refs/heads/barni2000/7.3/develop" clone-depth="1" />
 </manifest>

@@ -38,10 +38,11 @@ PRODUCT_PACKAGES += \
     init.thinksmart.rc \
     init.recovery.thinksmart.rc \
     use_memfd.rc \
-    disable_configstore \
     tinymix \
     tinycap \
     tinyplay
+
+PRODUCT_PACKAGES_DEBUG += fsverity
 
 DEVICE_PACKAGE_OVERLAYS += $(DEVICE_PATH)/overlays/overlay
 

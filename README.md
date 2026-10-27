@@ -5,13 +5,27 @@ Standard Android `repo`, `lunch` and `m`; no separate build system.
 
 ## Status
 
-| Area | State in the existing port |
+LineageOS 24.0 / Android 17 with msm8953-mainline Linux 7.3 develop.
+Boots to the Android UI with root ADB.
+
+| Hardware / feature | Status |
 |---|---|
-| Software | LineageOS 23.2 / Android 16; msm8953-mainline Linux 7.1.3 |
-| Working | Display/touch, Wi-Fi, graphics, speaker/microphone, buttons, RTC, thermal, ALS/proximity |
-| Partial | Initial AVC/HEVC decoding; Bluetooth profiles unqualified |
-| Unsupported | Camera, accelerometer, full suspend, OTA installation |
-| Security | Experimental userdebug; SELinux permissive; verified boot disabled |
+| Display and backlight | Working |
+| GPU acceleration | Working |
+| Wi-Fi | Working |
+| Bluetooth LE scanning | Working |
+| Audio streaming and microphone capture | Working |
+| Ambient-light and proximity sensor readings | Working |
+| Thermal sensors | Working |
+| RTC | Working |
+| Internal storage | Working |
+| Hardware AVC/H.264 and HEVC/H.265 decoding | Working |
+| Camera | Not working |
+| Accelerometer | Not working |
+| Full system suspend | Not working |
+
+OTA installation is not supported. This is an experimental userdebug build
+with permissive SELinux and verified boot disabled.
 
 ## Contents and requirements
 
@@ -19,15 +33,13 @@ Standard Android `repo`, `lunch` and `m`; no separate build system.
 |---|---|
 | Device build definitions | Root `*.mk` and `Android.bp` |
 | Runtime configuration and firmware lists | `config/` |
-| Platform / mainline sources | LineageOS `lineage-23.2` plus [17-project local manifest](manifests/thinksmart.xml) |
+| Platform / mainline sources | LineageOS `lineage-24.0` plus [20-project local manifest](manifests/thinksmart.xml) |
 | Community kernel configuration | `upstream/xiaomi-mainline` Git submodule |
 | Maintained codec sources | `drivers/tas5782m`; copied with attribution and local fixes |
 | Changes to upstream projects | `patches/<Android project path>/0001-description.patch` |
 | Private firmware | 29 files checked against [firmware.sha256](config/firmware.sha256); not distributed |
 | Build host | x86-64 Linux; dependencies in [Dockerfile](Dockerfile); budget **350 GiB free** |
 | Installation | Stock GPT, installed compatible lk2nd, original physical boot backup, working [EDL](https://github.com/bkerler/edl) setup |
-
-See [PROVENANCE.md](PROVENANCE.md) for copied-source origins and licenses.
 
 ## Build
 
@@ -50,7 +62,7 @@ dependencies.
 
 ```sh
 mkdir android-tsv && cd android-tsv
-repo init -u https://github.com/LineageOS/android.git -b lineage-23.2 --git-lfs
+repo init -u https://github.com/LineageOS/android.git -b lineage-24.0 --git-lfs
 DEVICE=device/lenovo/thinksmart
 mkdir -p device/lenovo .repo/local_manifests
 git clone --recurse-submodules https://github.com/salaman/tsv-lineage.git "$DEVICE"
@@ -87,6 +99,9 @@ Branch-tracking dependencies can change.
 | Wi-Fi | Stock modem board/firmware/OTP; helper creates the ath10k container |
 | Speaker DSP tuning | [Community board firmware](https://gitlab.com/kaechele/postmarketos-vendor-lenovo-cd-18781y), revision `337032e864fd6abe29375997fc3683398a4d27c4`, `sound/tas5728m_dsp_lenovo_cd-18781y.bin` |
 
+The speaker DSP register data is derived from Lenovo's released kernel sources,
+not extracted from a stock firmware partition. Wi-Fi packaging uses the
+credited ath10k encoder with fixed metadata to reproduce the qualified container.
 The extraction helper verifies all 29 files and refuses existing output.
 Keep firmware private; redistribution permission is not assumed.
 Examples use `/private` for inputs; in Docker use `/integration/private`.
@@ -129,7 +144,7 @@ From the source root, after firmware extraction:
 
 ```sh
 source build/envsetup.sh
-lunch lineage_thinksmart bp4a userdebug
+lunch lineage_thinksmart cp2a userdebug
 m bootimage recoveryimage systemimage vendorimage
 ```
 
@@ -170,3 +185,19 @@ img2simg /private/userdata.raw.img /private/userdata-fbe.img
 - **Never write Android `boot.img` directly to physical `boot`.**
 - Do not alter GPT, aboot, OEM (`/metadata`), persist, modem or other firmware partitions.
 - Keep original backups. Stock-device lk2nd installation and OTA ZIPs are outside this port.
+
+## Source credits and licensing
+
+External Android/kernel projects are synced with Android `repo`, not copied
+here. Patch mailboxes carry authorship, source references, base revisions and
+local adaptation notes; preserve upstream authors and signoffs when rebasing.
+
+| Material | Source / licensing |
+|---|---|
+| TAS5782M codec | Origins, contributors and local changes in [drivers/tas5782m/README.md](drivers/tas5782m/README.md); GPL-2.0-only |
+| Xiaomi kernel configuration | [android_device_xiaomi_mi89xx-mainline](https://github.com/LineageOS/android_device_xiaomi_mi89xx-mainline); pinned by the Git submodule; upstream notices apply |
+| ath10k firmware encoder | Origin and ISC license in [tools/README.md](tools/README.md) and the script's original notice |
+
+Source-tree licenses and notices apply to modifications; this port does not
+relicense third-party material. GPL text is in [LICENSES/GPL-2.0.txt](LICENSES/GPL-2.0.txt).
+Choose a license for newly authored integration files before public distribution.

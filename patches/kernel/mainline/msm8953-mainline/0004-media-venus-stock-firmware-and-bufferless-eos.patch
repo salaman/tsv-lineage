@@ -1,3 +1,6 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] media: venus: handle ThinkSmart stock firmware init and bufferless EOS
 
 The Lenovo stock firmware advertises 76 system-init properties, with
@@ -18,22 +21,28 @@ Enable both compatibility quirks only on lenovo,cd-18781y with
 qcom,msm8953-venus. Other boards retain their existing parsing and EOF
 paths, with additional bounds validation for variable arrays.
 
-This local compatibility fix was validated against Debian
-7.1.8+deb13.9-msm8953 and is packaged in the .10 baseline. It is not
-an upstream-final firmware-version policy.
-H264/HEVC exact-pixel decoding, bufferless/deferred EOF, same-FD command
-restart, STREAMOFF pool reuse, pending-EOS close and drain cancellation
-are covered by live tests. FFmpeg's separate startup packet-discard bug
-is not repaired here. See debian-image-build/README.md for limitations.
+Retain Linux 7.3's upstream capability/allocation payload-size fixes.
+Its raw-format structures contain a single trailing plane record rather
+than flexible arrays, so validate each variable-length wire record using
+its field offsets and accumulate the actual bytes consumed.
+
+This compatibility behavior was exercised on the earlier 7.1 kernel,
+including exact-pixel H.264/HEVC decoding, deferred EOF, command restart,
+STREAMOFF pool reuse and drain cancellation. The 7.3 rebase needs renewed
+device qualification; this is not a firmware-version-independent policy.
 
 Origin: Local ThinkSmart View port
-Base-commit: 7213855948c70fd165356526f1de1c3b6bf4d554
+Source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 Apply in filename order within this project.
 
+
 ---
+diff --git a/drivers/media/platform/qcom/venus/core.c b/drivers/media/platform/qcom/venus/core.c
+index e040397acdf3349912778475e29d63ac9d327d96..67a728320c3f14830409f72ea073f72ab0e805d8 100644
 --- a/drivers/media/platform/qcom/venus/core.c
 +++ b/drivers/media/platform/qcom/venus/core.c
-@@ -406,6 +406,11 @@
+@@ -409,6 +409,11 @@ static int venus_probe(struct platform_device *pdev)
  	if (!core->res)
  		return -ENODEV;
  
@@ -45,6 +54,8 @@ Apply in filename order within this project.
  	mutex_init(&core->pm_lock);
  
  	core->pm_ops = venus_pm_get(core->res->hfi_version);
+diff --git a/drivers/media/platform/qcom/venus/core.h b/drivers/media/platform/qcom/venus/core.h
+index 46705a6667762e8975e32947b4cb3355e20754d0..d6d51c7b3f871e909519c4c7997c99d84c56088f 100644
 --- a/drivers/media/platform/qcom/venus/core.h
 +++ b/drivers/media/platform/qcom/venus/core.h
 @@ -9,6 +9,8 @@
@@ -66,7 +77,7 @@ Apply in filename order within this project.
  extern int venus_fw_debug;
  
  struct freq_tbl {
-@@ -243,6 +248,7 @@
+@@ -250,6 +255,7 @@ struct venus_core {
  	unsigned long dump_core;
  	struct of_changeset *ocs;
  	bool hwmode_dev;
@@ -74,7 +85,7 @@ Apply in filename order within this project.
  };
  
  struct vdec_controls {
-@@ -338,6 +344,7 @@
+@@ -345,6 +351,7 @@ struct venus_buffer {
  	struct list_head reg_list;
  	u32 flags;
  	struct list_head ref_list;
@@ -82,7 +93,7 @@ Apply in filename order within this project.
  };
  
  struct clock_data {
-@@ -450,6 +457,11 @@
+@@ -457,6 +464,11 @@ enum venus_inst_modes {
   * @drain_active:	Drain sequence is in progress
   * @flags:	bitmask flags describing current instance mode
   * @dpb_ids:	DPB buffer ID's
@@ -94,7 +105,7 @@ Apply in filename order within this project.
   */
  struct venus_inst {
  	struct list_head list;
-@@ -521,6 +533,11 @@
+@@ -528,6 +540,11 @@ struct venus_inst {
  	bool drain_active;
  	enum venus_inst_modes flags;
  	struct ida dpb_ids;
@@ -106,246 +117,11 @@ Apply in filename order within this project.
  };
  
  #define IS_V1(core)	((core)->res->hfi_version == HFI_VERSION_1XX)
---- a/drivers/media/platform/qcom/venus/hfi.h
-+++ b/drivers/media/platform/qcom/venus/hfi.h
-@@ -53,6 +53,7 @@
- #define EVT_SYS_WATCHDOG_TIMEOUT		2
- #define EVT_SYS_ERROR				3
- #define EVT_SESSION_ERROR			4
-+#define EVT_SESSION_EOS				5
- 
- /* HFI event callback structure */
- struct hfi_event_data {
---- a/drivers/media/platform/qcom/venus/hfi_msgs.c
-+++ b/drivers/media/platform/qcom/venus/hfi_msgs.c
-@@ -273,7 +273,7 @@
- 		goto done;
- 	}
- 
--	error = hfi_parser(core, inst, pkt->data, rem_bytes);
-+	error = hfi_parser(core, inst, pkt->data, rem_bytes, pkt->num_properties);
- 
- done:
- 	core->error = error;
-@@ -506,7 +506,7 @@
- 		goto done;
- 	}
- 
--	error = hfi_parser(core, inst, pkt->data, rem_bytes);
-+	error = hfi_parser(core, inst, pkt->data, rem_bytes, pkt->num_properties);
- done:
- 	inst->error = error;
- 	complete(&inst->done);
-@@ -583,6 +583,14 @@
- 			buffer_type = HFI_BUFFER_OUTPUT2;
- 
- 		error = pkt->error_type;
-+		if ((core->quirks & VENUS_QUIRK_BUFFERLESS_EOS) &&
-+		    buffer_type == inst->opb_buftype &&
-+		    (hfi_flags & HFI_BUFFERFLAG_EOS) &&
-+		    !error && !filled_len && !pkt->packet_buffer) {
-+			inst->error = HFI_ERR_NONE;
-+			inst->ops->event_notify(inst, EVT_SESSION_EOS, NULL);
-+			return;
-+		}
- 	} else {
- 		error = HFI_ERR_SESSION_INVALID_PARAMETER;
- 	}
---- a/drivers/media/platform/qcom/venus/hfi_parser.c
-+++ b/drivers/media/platform/qcom/venus/hfi_parser.c
-@@ -65,7 +65,8 @@
- }
- 
- static int
--parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
-+parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data,
-+		 u32 rem_bytes)
- {
- 	struct hfi_buffer_alloc_mode_supported *mode = data;
- 	u32 num_entries = mode->num_entries;
-@@ -74,6 +75,9 @@
- 	if (num_entries > MAX_ALLOC_MODE_ENTRIES)
- 		return -EINVAL;
- 
-+	if (struct_size(mode, data, num_entries) > rem_bytes)
-+		return -EOVERFLOW;
-+
- 	type = mode->data;
- 
- 	while (num_entries--) {
-@@ -101,7 +105,8 @@
- }
- 
- static int
--parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data)
-+parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data,
-+		    u32 rem_bytes)
- {
- 	struct hfi_profile_level_supported *pl = data;
- 	struct hfi_profile_level *proflevel = pl->profile_level;
-@@ -110,6 +115,9 @@
- 	if (pl->profile_count > HFI_MAX_PROFILE_COUNT)
- 		return -EINVAL;
- 
-+	if (struct_size(pl, profile_level, pl->profile_count) > rem_bytes)
-+		return -EOVERFLOW;
-+
- 	memcpy(pl_arr, proflevel, pl->profile_count * sizeof(*proflevel));
- 
- 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
-@@ -131,7 +139,8 @@
- }
- 
- static int
--parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data)
-+parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data,
-+	   u32 rem_bytes)
- {
- 	struct hfi_capabilities *caps = data;
- 	struct hfi_capability *cap = caps->data;
-@@ -141,6 +150,9 @@
- 	if (num_caps > MAX_CAP_ENTRIES)
- 		return -EINVAL;
- 
-+	if (struct_size(caps, data, num_caps) > rem_bytes)
-+		return -EOVERFLOW;
-+
- 	memcpy(caps_arr, cap, num_caps * sizeof(*cap));
- 
- 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
-@@ -166,7 +178,7 @@
- {
- 	struct hfi_uncompressed_format_supported *fmt = data;
- 	struct raw_formats rawfmts[MAX_FMT_ENTRIES] = {};
--	u32 entries = fmt->format_entries;
-+	u32 entries;
- 	u32 size, num_planes;
- 	unsigned int i = 0;
- 
-@@ -175,6 +187,8 @@
- 	if (size > rem_bytes)
- 		return -EOVERFLOW;
- 
-+	entries = fmt->format_entries;
-+
- 	for (;entries; entries --) {
- 		struct hfi_uncompressed_plane_info *pinfo = data + size;
- 
-@@ -301,11 +315,11 @@
- }
- 
- u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
--	       u32 size)
-+	       u32 size, u32 num_properties)
- {
- 	u32 *words = buf, *payload, codecs = 0, domain = 0;
--	u32 *frame_size = buf + size;
- 	u32 rem_bytes = size;
-+	bool counted = (core->quirks & VENUS_QUIRK_LEGACY_SYS_INIT) && !inst;
- 	int ret;
- 
- 	ret = hfi_platform_parser(core, inst);
-@@ -322,11 +336,14 @@
- 		memset(core->caps, 0, sizeof(core->caps));
- 	}
- 
--	while (words < frame_size) {
-+	while (rem_bytes >= sizeof(u32) && (!counted || num_properties)) {
- 		u32 property = words[0];
- 		payload = ++words;
- 		rem_bytes -= 4;
- 
-+		if (counted && !property)
-+			continue;
-+
- 		switch (property) {
- 		case HFI_PROPERTY_PARAM_CODEC_SUPPORTED:
- 			if (rem_bytes < sizeof(struct hfi_codec_supported))
-@@ -336,6 +353,19 @@
- 			if (ret < 0)
- 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
- 
-+			if (counted) {
-+				if (rem_bytes < ret + sizeof(u32) +
-+						sizeof(struct hfi_max_sessions_supported))
-+					return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
-+				if (payload[ret / sizeof(u32)] !=
-+				    HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED)
-+					return HFI_ERR_SYS_INVALID_PARAMETER;
-+
-+				/* The legacy count treats these adjacent records as one. */
-+				ret += sizeof(u32) + parse_max_sessions(core,
-+						payload + ret / sizeof(u32) + 1);
-+			}
-+
- 			init_codecs(core);
- 			break;
- 		case HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED:
-@@ -357,19 +387,19 @@
- 			if (rem_bytes < sizeof(struct hfi_capabilities))
- 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
- 
--			ret = parse_caps(core, codecs, domain, payload);
-+			ret = parse_caps(core, codecs, domain, payload, rem_bytes);
- 			break;
- 		case HFI_PROPERTY_PARAM_PROFILE_LEVEL_SUPPORTED:
- 			if (rem_bytes < sizeof(struct hfi_profile_level_supported))
- 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
- 
--			ret = parse_profile_level(core, codecs, domain, payload);
-+			ret = parse_profile_level(core, codecs, domain, payload, rem_bytes);
- 			break;
- 		case HFI_PROPERTY_PARAM_BUFFER_ALLOC_MODE_SUPPORTED:
- 			if (rem_bytes < sizeof(struct hfi_buffer_alloc_mode_supported))
- 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
- 
--			ret = parse_alloc_mode(core, codecs, domain, payload);
-+			ret = parse_alloc_mode(core, codecs, domain, payload, rem_bytes);
- 			break;
- 		case HFI_PROPERTY_PARAM_INTERLACE_FORMAT_SUPPORTED:
- 			ret = sizeof(struct hfi_interlace_format_supported);
-@@ -379,6 +409,8 @@
- 			break;
- 		default:
- 			dev_warn_once(core->dev, "Unsupported property: %x\n", property);
-+			if (counted)
-+				return HFI_ERR_SYS_INVALID_PARAMETER;
- 			ret = 0;
- 			break;
- 		}
-@@ -388,8 +420,18 @@
- 
- 		words += ret / sizeof(u32);
- 		rem_bytes -= ret;
-+		if (counted)
-+			num_properties--;
- 	}
- 
-+	if (counted && num_properties)
-+		return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
-+
-+	if (counted && rem_bytes)
-+		dev_warn(core->dev,
-+			 "legacy SYS_INIT: %u bytes after advertised properties\n",
-+			 rem_bytes);
-+
- 	if (!core->max_sessions_supported)
- 		core->max_sessions_supported = MAX_SESSIONS;
- 
---- a/drivers/media/platform/qcom/venus/hfi_parser.h
-+++ b/drivers/media/platform/qcom/venus/hfi_parser.h
-@@ -6,7 +6,7 @@
- #include "core.h"
- 
- u32 hfi_parser(struct venus_core *core, struct venus_inst *inst,
--	       void *buf, u32 size);
-+	       void *buf, u32 size, u32 num_properties);
- 
- #define WHICH_CAP_MIN	0
- #define WHICH_CAP_MAX	1
+diff --git a/drivers/media/platform/qcom/venus/helpers.c b/drivers/media/platform/qcom/venus/helpers.c
+index 7c094009c0050bd599f63e8cc4180369bb00de62..a050cd28f1a348b7ea8cb70b39aeca55d4e8c2e8 100644
 --- a/drivers/media/platform/qcom/venus/helpers.c
 +++ b/drivers/media/platform/qcom/venus/helpers.c
-@@ -502,6 +502,10 @@
+@@ -502,6 +502,10 @@ session_process_buf(struct venus_inst *inst, struct vb2_v4l2_buffer *vbuf)
  	struct vb2_buffer *vb = &vbuf->vb2_buf;
  	unsigned int type = vb->type;
  	struct hfi_frame_data fdata;
@@ -356,7 +132,7 @@ Apply in filename order within this project.
  
  	memset(&fdata, 0, sizeof(fdata));
  	fdata.alloc_len = buf->size;
-@@ -532,7 +536,12 @@
+@@ -532,7 +536,12 @@ session_process_buf(struct venus_inst *inst, struct vb2_v4l2_buffer *vbuf)
  		fdata.offset = 0;
  	}
  
@@ -370,7 +146,7 @@ Apply in filename order within this project.
  }
  
  static bool is_dynamic_bufmode(struct venus_inst *inst)
-@@ -1362,6 +1371,9 @@
+@@ -1362,6 +1371,9 @@ static void delayed_process_buf_func(struct work_struct *work)
  	if (!(inst->streamon_out & inst->streamon_cap))
  		goto unlock;
  
@@ -380,7 +156,7 @@ Apply in filename order within this project.
  	list_for_each_entry_safe(buf, n, &inst->delayed_process, ref_list) {
  		if (buf->flags & HFI_BUFFERFLAG_READONLY)
  			continue;
-@@ -1449,6 +1461,7 @@
+@@ -1449,6 +1461,7 @@ int venus_helper_vb2_buf_init(struct vb2_buffer *vb)
  
  	buf->size = vb2_plane_size(vb, 0);
  	buf->dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
@@ -388,7 +164,7 @@ Apply in filename order within this project.
  
  	if (vb->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
  		list_add_tail(&buf->reg_list, &inst->registeredbufs);
-@@ -1525,6 +1538,10 @@
+@@ -1525,6 +1538,10 @@ void venus_helper_vb2_buf_queue(struct vb2_buffer *vb)
  		if (ret)
  			return;
  
@@ -399,7 +175,7 @@ Apply in filename order within this project.
  		ret = session_process_buf(inst, vbuf);
  		if (ret)
  			return_buf_error(inst, vbuf);
-@@ -1611,6 +1628,21 @@
+@@ -1611,6 +1628,21 @@ int venus_helper_process_initial_cap_bufs(struct venus_inst *inst)
  	int ret;
  
  	v4l2_m2m_for_each_dst_buf_safe(m2m_ctx, buf, n) {
@@ -421,9 +197,334 @@ Apply in filename order within this project.
  		ret = session_process_buf(inst, &buf->vb);
  		if (ret) {
  			return_buf_error(inst, &buf->vb);
+diff --git a/drivers/media/platform/qcom/venus/hfi.h b/drivers/media/platform/qcom/venus/hfi.h
+index 0338841d5992b0b462d82544f610999182869163..066cbb8e558dea0b7bec6b771b89b287dca57b87 100644
+--- a/drivers/media/platform/qcom/venus/hfi.h
++++ b/drivers/media/platform/qcom/venus/hfi.h
+@@ -53,6 +53,7 @@ union hfi_get_property {
+ #define EVT_SYS_WATCHDOG_TIMEOUT		2
+ #define EVT_SYS_ERROR				3
+ #define EVT_SESSION_ERROR			4
++#define EVT_SESSION_EOS				5
+ 
+ /* HFI event callback structure */
+ struct hfi_event_data {
+diff --git a/drivers/media/platform/qcom/venus/hfi_msgs.c b/drivers/media/platform/qcom/venus/hfi_msgs.c
+index 5c2025c5acc75369e94b3becff7a1421d1b9ffbf..0eb1bc61fbbe32e2092e450e60af16f47620311e 100644
+--- a/drivers/media/platform/qcom/venus/hfi_msgs.c
++++ b/drivers/media/platform/qcom/venus/hfi_msgs.c
+@@ -273,7 +273,7 @@ static void hfi_sys_init_done(struct venus_core *core, struct venus_inst *inst,
+ 		goto done;
+ 	}
+ 
+-	error = hfi_parser(core, inst, pkt->data, rem_bytes);
++	error = hfi_parser(core, inst, pkt->data, rem_bytes, pkt->num_properties);
+ 
+ done:
+ 	core->error = error;
+@@ -506,7 +506,7 @@ static void hfi_session_init_done(struct venus_core *core,
+ 		goto done;
+ 	}
+ 
+-	error = hfi_parser(core, inst, pkt->data, rem_bytes);
++	error = hfi_parser(core, inst, pkt->data, rem_bytes, pkt->num_properties);
+ done:
+ 	inst->error = error;
+ 	complete(&inst->done);
+@@ -583,6 +583,14 @@ static void hfi_session_ftb_done(struct venus_core *core,
+ 			buffer_type = HFI_BUFFER_OUTPUT2;
+ 
+ 		error = pkt->error_type;
++		if ((core->quirks & VENUS_QUIRK_BUFFERLESS_EOS) &&
++		    buffer_type == inst->opb_buftype &&
++		    (hfi_flags & HFI_BUFFERFLAG_EOS) &&
++		    !error && !filled_len && !pkt->packet_buffer) {
++			inst->error = HFI_ERR_NONE;
++			inst->ops->event_notify(inst, EVT_SESSION_EOS, NULL);
++			return;
++		}
+ 	} else {
+ 		error = HFI_ERR_SESSION_INVALID_PARAMETER;
+ 	}
+diff --git a/drivers/media/platform/qcom/venus/hfi_parser.c b/drivers/media/platform/qcom/venus/hfi_parser.c
+index 62fde745f754cdaaf30e360839ff171c6f7359f5..eea042ecdf8aa722c130d2699d80c5a9cb8d3e62 100644
+--- a/drivers/media/platform/qcom/venus/hfi_parser.c
++++ b/drivers/media/platform/qcom/venus/hfi_parser.c
+@@ -65,7 +65,8 @@ fill_buf_mode(struct hfi_plat_caps *cap, const void *data, unsigned int num)
+ }
+ 
+ static int
+-parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
++parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data,
++		 u32 rem_bytes)
+ {
+ 	struct hfi_buffer_alloc_mode_supported *mode = data;
+ 	u32 num_entries = mode->num_entries;
+@@ -74,6 +75,9 @@ parse_alloc_mode(struct venus_core *core, u32 codecs, u32 domain, void *data)
+ 	if (num_entries > MAX_ALLOC_MODE_ENTRIES)
+ 		return -EINVAL;
+ 
++	if (struct_size(mode, data, num_entries) > rem_bytes)
++		return -EOVERFLOW;
++
+ 	type = mode->data;
+ 
+ 	while (num_entries--) {
+@@ -101,7 +105,8 @@ static void fill_profile_level(struct hfi_plat_caps *cap, const void *data,
+ }
+ 
+ static int
+-parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data)
++parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data,
++		    u32 rem_bytes)
+ {
+ 	struct hfi_profile_level_supported *pl = data;
+ 	struct hfi_profile_level *proflevel = pl->profile_level;
+@@ -110,6 +115,9 @@ parse_profile_level(struct venus_core *core, u32 codecs, u32 domain, void *data)
+ 	if (pl->profile_count > HFI_MAX_PROFILE_COUNT)
+ 		return -EINVAL;
+ 
++	if (struct_size(pl, profile_level, pl->profile_count) > rem_bytes)
++		return -EOVERFLOW;
++
+ 	memcpy(pl_arr, proflevel, pl->profile_count * sizeof(*proflevel));
+ 
+ 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
+@@ -131,7 +139,8 @@ fill_caps(struct hfi_plat_caps *cap, const void *data, unsigned int num)
+ }
+ 
+ static int
+-parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data)
++parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data,
++	   u32 rem_bytes)
+ {
+ 	struct hfi_capabilities *caps = data;
+ 	struct hfi_capability *cap = caps->data;
+@@ -141,6 +150,9 @@ parse_caps(struct venus_core *core, u32 codecs, u32 domain, void *data)
+ 	if (num_caps > MAX_CAP_ENTRIES)
+ 		return -EINVAL;
+ 
++	if (struct_size(caps, data, num_caps) > rem_bytes)
++		return -EOVERFLOW;
++
+ 	memcpy(caps_arr, cap, num_caps * sizeof(*cap));
+ 
+ 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
+@@ -162,34 +174,42 @@ static void fill_raw_fmts(struct hfi_plat_caps *cap, const void *fmts,
+ }
+ 
+ static int
+-parse_raw_formats(struct venus_core *core, u32 codecs, u32 domain, void *data)
++parse_raw_formats(struct venus_core *core, u32 codecs, u32 domain, void *data,
++		  u32 rem_bytes)
+ {
+ 	struct hfi_uncompressed_format_supported *fmt = data;
+-	struct hfi_uncompressed_plane_info *pinfo = &fmt->plane_info;
+-	struct hfi_uncompressed_plane_constraints *constr;
+ 	struct raw_formats rawfmts[MAX_FMT_ENTRIES] = {};
+-	u32 entries = fmt->format_entries;
++	u32 entries, num_planes, entry_size;
++	u32 size = offsetof(struct hfi_uncompressed_format_supported, plane_info);
+ 	unsigned int i = 0;
+-	u32 num_planes = 0;
+-	u32 size = 2 * sizeof(u32);
+ 
+-	while (entries) {
+-		num_planes = pinfo->num_planes;
++	if (size > rem_bytes)
++		return -EOVERFLOW;
+ 
+-		rawfmts[i].fmt = pinfo->format;
+-		rawfmts[i].buftype = fmt->buffer_type;
+-		i++;
++	entries = fmt->format_entries;
++	for (; entries; entries--) {
++		struct hfi_uncompressed_plane_info *pinfo = data + size;
+ 
+-		if (i >= MAX_FMT_ENTRIES)
++		entry_size = offsetof(struct hfi_uncompressed_plane_info,
++				      plane_constraints);
++		if (entry_size > rem_bytes - size)
++			return -EOVERFLOW;
++
++		num_planes = pinfo->num_planes;
++		if (num_planes > MAX_PLANES)
+ 			return -EINVAL;
+ 
+-		if (pinfo->num_planes > MAX_PLANES)
+-			break;
++		entry_size += sizeof(pinfo->plane_constraints) * num_planes;
++		if (entry_size > rem_bytes - size)
++			return -EOVERFLOW;
++		size += entry_size;
++
++		if (i >= MAX_FMT_ENTRIES)
++			continue;
+ 
+-		size += sizeof(*constr) * num_planes + 2 * sizeof(u32);
+-		pinfo = (void *)pinfo + sizeof(*constr) * num_planes +
+-			2 * sizeof(u32);
+-		entries--;
++		rawfmts[i].fmt = pinfo->format;
++		rawfmts[i].buftype = fmt->buffer_type;
++		i++;
+ 	}
+ 
+ 	for_each_codec(core->caps, ARRAY_SIZE(core->caps), codecs, domain,
+@@ -295,11 +315,11 @@ static int hfi_platform_parser(struct venus_core *core, struct venus_inst *inst)
+ }
+ 
+ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
+-	       u32 size)
++	       u32 size, u32 num_properties)
+ {
+ 	u32 *words = buf, *payload, codecs = 0, domain = 0;
+-	u32 *frame_size = buf + size;
+ 	u32 rem_bytes = size;
++	bool counted = (core->quirks & VENUS_QUIRK_LEGACY_SYS_INIT) && !inst;
+ 	int ret;
+ 
+ 	ret = hfi_platform_parser(core, inst);
+@@ -316,55 +336,74 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
+ 		memset(core->caps, 0, sizeof(core->caps));
+ 	}
+ 
+-	while (words < frame_size) {
+-		payload = words + 1;
++	while (rem_bytes >= sizeof(u32) && (!counted || num_properties)) {
++		u32 property = *words++;
++
++		payload = words;
++		rem_bytes -= sizeof(u32);
++		if (counted && !property)
++			continue;
+ 
+-		switch (*words) {
++		switch (property) {
+ 		case HFI_PROPERTY_PARAM_CODEC_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_codec_supported))
++			if (rem_bytes < sizeof(struct hfi_codec_supported))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+ 			ret = parse_codecs(core, payload);
+ 			if (ret < 0)
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
++			if (counted) {
++				if (rem_bytes < ret + sizeof(u32) +
++						sizeof(struct hfi_max_sessions_supported))
++					return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
++				if (payload[ret / sizeof(u32)] !=
++				    HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED)
++					return HFI_ERR_SYS_INVALID_PARAMETER;
++
++				/* The legacy count treats these adjacent records as one. */
++				ret += sizeof(u32) + parse_max_sessions(core,
++						payload + ret / sizeof(u32) + 1);
++			}
++
+ 			init_codecs(core);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_MAX_SESSIONS_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_max_sessions_supported))
++			if (rem_bytes < sizeof(struct hfi_max_sessions_supported))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+ 			ret = parse_max_sessions(core, payload);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_CODEC_MASK_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_codec_mask_supported))
++			if (rem_bytes < sizeof(struct hfi_codec_mask_supported))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+ 			ret = parse_codecs_mask(&codecs, &domain, payload);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_UNCOMPRESSED_FORMAT_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_uncompressed_format_supported))
++			if (rem_bytes < offsetof(struct hfi_uncompressed_format_supported,
++						 plane_info))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+-			ret = parse_raw_formats(core, codecs, domain, payload);
++			ret = parse_raw_formats(core, codecs, domain, payload, rem_bytes);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_CAPABILITY_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_capabilities))
++			if (rem_bytes < sizeof(struct hfi_capabilities))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+-			ret = parse_caps(core, codecs, domain, payload);
++			ret = parse_caps(core, codecs, domain, payload, rem_bytes);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_PROFILE_LEVEL_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_profile_level_supported))
++			if (rem_bytes < sizeof(struct hfi_profile_level_supported))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+-			ret = parse_profile_level(core, codecs, domain, payload);
++			ret = parse_profile_level(core, codecs, domain, payload, rem_bytes);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_BUFFER_ALLOC_MODE_SUPPORTED:
+-			if (rem_bytes <= sizeof(struct hfi_buffer_alloc_mode_supported))
++			if (rem_bytes < sizeof(struct hfi_buffer_alloc_mode_supported))
+ 				return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+-			ret = parse_alloc_mode(core, codecs, domain, payload);
++			ret = parse_alloc_mode(core, codecs, domain, payload, rem_bytes);
+ 			break;
+ 		case HFI_PROPERTY_PARAM_INTERLACE_FORMAT_SUPPORTED:
+ 			ret = sizeof(struct hfi_interlace_format_supported);
+@@ -373,17 +412,30 @@ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst, void *buf,
+ 			ret = sizeof(struct hfi_seq_header_info);
+ 			break;
+ 		default:
+-			ret = sizeof(u32);
++			dev_warn_once(core->dev, "Unsupported property: %x\n", property);
++			if (counted)
++				return HFI_ERR_SYS_INVALID_PARAMETER;
++			ret = 0;
+ 			break;
+ 		}
+ 
+-		if (ret < 0)
++		if (ret < 0 || ret > rem_bytes || ret % sizeof(u32))
+ 			return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
+ 
+ 		words += ret / sizeof(u32);
+ 		rem_bytes -= ret;
++		if (counted)
++			num_properties--;
+ 	}
+ 
++	if (counted && num_properties)
++		return HFI_ERR_SYS_INSUFFICIENT_RESOURCES;
++
++	if (counted && rem_bytes)
++		dev_warn(core->dev,
++			 "legacy SYS_INIT: %u bytes after advertised properties\n",
++			 rem_bytes);
++
+ 	if (!core->max_sessions_supported)
+ 		core->max_sessions_supported = MAX_SESSIONS;
+ 
+diff --git a/drivers/media/platform/qcom/venus/hfi_parser.h b/drivers/media/platform/qcom/venus/hfi_parser.h
+index 5751d0140700cba3e11af36c9e5f572f70c728ca..8608f87325465b2aab3ec4dcab4144ce5eaf1853 100644
+--- a/drivers/media/platform/qcom/venus/hfi_parser.h
++++ b/drivers/media/platform/qcom/venus/hfi_parser.h
+@@ -6,7 +6,7 @@
+ #include "core.h"
+ 
+ u32 hfi_parser(struct venus_core *core, struct venus_inst *inst,
+-	       void *buf, u32 size);
++	       void *buf, u32 size, u32 num_properties);
+ 
+ #define WHICH_CAP_MIN	0
+ #define WHICH_CAP_MAX	1
+diff --git a/drivers/media/platform/qcom/venus/vdec.c b/drivers/media/platform/qcom/venus/vdec.c
+index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29fe4c7cfa 100644
 --- a/drivers/media/platform/qcom/venus/vdec.c
 +++ b/drivers/media/platform/qcom/venus/vdec.c
-@@ -545,6 +545,80 @@
+@@ -544,6 +544,80 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
  	}
  }
  
@@ -504,7 +605,7 @@ Apply in filename order within this project.
  static int
  vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
  {
-@@ -593,7 +667,15 @@
+@@ -592,7 +666,15 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
  					 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
  		vb2_clear_last_buffer_dequeued(dst_vq);
  
@@ -520,7 +621,7 @@ Apply in filename order within this project.
  	}
  
  unlock:
-@@ -1053,6 +1135,7 @@
+@@ -1052,6 +1134,7 @@ static int vdec_start_capture(struct venus_inst *inst)
  		venus_helper_queue_dpb_bufs(inst);
  		venus_helper_process_initial_cap_bufs(inst);
  		inst->streamon_cap = 1;
@@ -528,7 +629,7 @@ Apply in filename order within this project.
  		return 0;
  	}
  
-@@ -1102,6 +1185,9 @@
+@@ -1101,6 +1184,9 @@ reconfigure:
  	inst->sequence_cap = 0;
  	inst->reconfig = false;
  	inst->drain_active = false;
@@ -538,7 +639,7 @@ Apply in filename order within this project.
  
  	return 0;
  
-@@ -1231,13 +1317,39 @@
+@@ -1230,13 +1316,39 @@ static void vdec_cancel_dst_buffers(struct venus_inst *inst)
  		v4l2_m2m_buf_done(buf, VB2_BUF_STATE_ERROR);
  }
  
@@ -578,7 +679,7 @@ Apply in filename order within this project.
  		fallthrough;
  	case VENUS_DEC_STATE_DRAIN:
  		inst->codec_state = VENUS_DEC_STATE_STOPPED;
-@@ -1248,6 +1360,8 @@
+@@ -1247,6 +1359,8 @@ static int vdec_stop_capture(struct venus_inst *inst)
  		break;
  	case VENUS_DEC_STATE_DRC:
  		ret = hfi_session_flush(inst, HFI_FLUSH_OUTPUT, true);
@@ -587,7 +688,7 @@ Apply in filename order within this project.
  		inst->codec_state = VENUS_DEC_STATE_CAPTURE_SETUP;
  		venus_helper_free_dpb_bufs(inst);
  		break;
-@@ -1268,11 +1382,15 @@
+@@ -1267,11 +1381,15 @@ static int vdec_stop_output(struct venus_inst *inst)
  	case VENUS_DEC_STATE_STOPPED:
  	case VENUS_DEC_STATE_DRC:
  		ret = hfi_session_flush(inst, HFI_FLUSH_ALL, true);
@@ -603,7 +704,7 @@ Apply in filename order within this project.
  		break;
  	default:
  		break;
-@@ -1286,9 +1404,12 @@
+@@ -1285,9 +1403,12 @@ static void vdec_stop_streaming(struct vb2_queue *q)
  	struct venus_inst *inst = vb2_get_drv_priv(q);
  	int ret = -EINVAL;
  
@@ -616,7 +717,7 @@ Apply in filename order within this project.
  
  	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
  		ret = vdec_stop_capture(inst);
-@@ -1316,6 +1437,7 @@
+@@ -1315,6 +1436,7 @@ static void vdec_session_release(struct venus_inst *inst)
  	struct venus_core *core = inst->core;
  	int ret, abort = 0;
  
@@ -624,7 +725,7 @@ Apply in filename order within this project.
  	vdec_pm_get(inst);
  
  	mutex_lock(&inst->lock);
-@@ -1363,9 +1485,12 @@
+@@ -1362,9 +1484,12 @@ static void vdec_buf_cleanup(struct vb2_buffer *vb)
  	struct venus_buffer *buf = to_venus_buffer(vbuf);
  
  	mutex_lock(&inst->lock);
@@ -638,7 +739,7 @@ Apply in filename order within this project.
  	mutex_unlock(&inst->lock);
  
  	inst->buf_count--;
-@@ -1383,6 +1508,13 @@
+@@ -1382,6 +1507,13 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
  
  	mutex_lock(&inst->lock);
  
@@ -652,7 +753,7 @@ Apply in filename order within this project.
  	if (inst->next_buf_last && V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type) &&
  	    inst->codec_state == VENUS_DEC_STATE_DRC) {
  		vbuf->flags |= V4L2_BUF_FLAG_LAST;
-@@ -1437,6 +1569,7 @@
+@@ -1436,6 +1568,7 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
  	vb = &vbuf->vb2_buf;
  
  	if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
@@ -660,7 +761,7 @@ Apply in filename order within this project.
  		vb2_set_plane_payload(vb, 0, bytesused);
  		vb->planes[0].data_offset = data_offset;
  		vb->timestamp = timestamp_us * NSEC_PER_USEC;
-@@ -1575,10 +1708,21 @@
+@@ -1574,10 +1707,21 @@ static void vdec_event_notify(struct venus_inst *inst, u32 event,
  {
  	struct venus_core *core = inst->core;
  	struct device *dev = core->dev_dec;
@@ -682,7 +783,7 @@ Apply in filename order within this project.
  	case EVT_SESSION_ERROR:
  		inst->session_error = true;
  		venus_helper_vb2_queue_error(inst);
-@@ -1695,6 +1839,8 @@
+@@ -1694,6 +1838,8 @@ static int vdec_open(struct file *file)
  	INIT_LIST_HEAD(&inst->list);
  	mutex_init(&inst->lock);
  	mutex_init(&inst->ctx_q_lock);
@@ -691,7 +792,7 @@ Apply in filename order within this project.
  
  	inst->core = core;
  	inst->session_type = VIDC_SESSION_TYPE_DEC;
-@@ -1762,6 +1908,7 @@
+@@ -1761,6 +1907,7 @@ static int vdec_close(struct file *file)
  	struct venus_inst *inst = to_inst(file);
  
  	vdec_pm_get(inst);

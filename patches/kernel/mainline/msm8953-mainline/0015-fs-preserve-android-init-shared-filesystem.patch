@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 25 Oct 2026 21:40:34 -0700
+Subject: [PATCH] fs: preserve Android init's shared filesystem after unshare
+
+Android init starts its property-service threads before unsharing its mount
+namespace for bootstrap and updatable APEXes. Those threads retain the old
+fs_struct, while init's main thread continues with the new one.
+
+Upstream 9a8e296958884b807a02759975170b6559901242 resets that old shared
+fs_struct to nullfs when PID 1 unshares. On this device the main thread and
+new services still see selinuxfs, but both property-service threads lose
+/sys/fs/selinux/access. Every property permission query fails with ENOENT,
+including ueventd's ro.cold_boot_done, leaving boot stuck before ADB.
+Kernel firmware lookups through userspace_init_fs also lose their root.
+
+Remove the invalidation hook, preserving the pre-7.3 filesystem-sharing
+behavior without changing SELinux checks or policy. Keep the remaining
+userspace_init_fs and nullfs infrastructure intact. Revisit this local
+compatibility patch when upstream supports Android's init namespace setup.
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/torvalds/linux/commit/9a8e296958884b807a02759975170b6559901242
+License: GPL-2.0-only (modified kernel sources)
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+Apply in filename order within this project.
+
+---
+diff --git a/fs/fs_struct.c b/fs/fs_struct.c
+--- a/fs/fs_struct.c
++++ b/fs/fs_struct.c
+@@ -154,49 +154,6 @@ int unshare_fs_struct(void)
+ }
+ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+ 
+-/*
+- * PID 1 may choose to stop sharing fs_struct state with us.
+- * Either via unshare(CLONE_FS) or unshare(CLONE_NEWNS). Of
+- * course, PID 1 could have chosen to create arbitrary process
+- * trees that all share fs_struct state via CLONE_FS. This is a
+- * strong statement: We only care about PID 1 aka the thread-group
+- * leader so subthread's fs_struct state doesn't matter.
+- *
+- * PID 1 unsharing fs_struct state is a bug. PID 1 relies on
+- * various kthreads to be able to perform work based on its
+- * fs_struct state. Breaking that contract sucks for both sides.
+- * So just don't bother with extra work for this. No sane init
+- * system should ever do this.
+- *
+- * On older kernels if PID 1 unshared its filesystem state with us the
+- * kernel simply used the stale fs_struct state implicitly pinning
+- * anything that PID 1 had last used. Even if PID 1 might've moved on to
+- * some completely different fs_struct state and might've even unmounted
+- * the old root.
+- *
+- * This has hilarious consequences: Think continuing to dump coredump
+- * state into an implicitly pinned directory somewhere. Calling random
+- * binaries in the old rootfs via usermodehelpers.
+- *
+- * Be aggressive about this: We simply reject operating on stale
+- * fs_struct state by reverting to nullfs. Every kworker that does
+- * lookups after this point will fail. Every usermodehelper call will
+- * fail. Tough luck but let's be kind and emit a warning to userspace.
+- */
+-static inline void validate_fs_switch(struct fs_struct *old_fs)
+-{
+-	might_sleep();
+-
+-	if (likely(current->pid != 1))
+-		return;
+-	/* @old_fs may be dangling but for comparison it's fine */
+-	if (old_fs != userspace_init_fs)
+-		return;
+-	pr_warn("VFS: Pid 1 stopped sharing filesystem state\n");
+-	set_fs_root(userspace_init_fs, &init_fs.root);
+-	set_fs_pwd(userspace_init_fs, &init_fs.root);
+-}
+-
+ struct fs_struct *switch_fs_struct(struct fs_struct *new_fs)
+ {
+ 	struct fs_struct *fs;
+@@ -214,6 +171,5 @@ struct fs_struct *switch_fs_struct(struct fs_struct *new_fs)
+ 		read_sequnlock_excl(&fs->seq);
+ 	}
+ 
+-	validate_fs_switch(fs);
+ 	return new_fs;
+ }
