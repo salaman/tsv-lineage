@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 1 Nov 2026 20:20:00 +0000
+Subject: [PATCH] power: supply: qcom-smbchg: report the actual AICL error
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/msm8953-mainline/linux
+License: GPL-2.0-only (modified upstream sources)
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+
+smbchg_handle_aicl_done() stores the result of smbchg_usb_get_ilim() in
+ilim, but its failure message uses an uninitialized ret instead. Report
+the actual negative result and remove the unused local variable.
+
+This fixes the compiler warning and preserves the interrupt handler's
+control flow and charger behavior.
+
+--- a/drivers/power/supply/qcom-smbchg.c
++++ b/drivers/power/supply/qcom-smbchg.c
+@@ -1116,13 +1116,12 @@ static irqreturn_t smbchg_handle_aicl_done(int irq, void *data)
+ {
+ 	struct smbchg_chip *chip = data;
+ 	int ilim;
+-	int ret;
+ 
+ 	dev_dbg(chip->dev, "AICL done");
+ 
+ 	ilim = smbchg_usb_get_ilim(chip);
+ 	if (ilim < 0)
+ 		dev_warn(chip->dev, "Failed to read AICL result: %pe\n",
+-			 ERR_PTR(ret));
++			 ERR_PTR(ilim));
+ 	else
+ 		dev_dbg(chip->dev, "AICL result: %uuA", ilim);

@@ -1,0 +1,4 @@
+allow vendor_msm_drm_quirks kmsg_device:chr_file write;
+
+# The quirks action waits for card0 before enabling the allocator.
+allow vendor_init gpu_device:chr_file getattr;

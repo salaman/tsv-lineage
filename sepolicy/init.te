@@ -1,0 +1,4 @@
+allow init vendor_thinksmart_sysfs_discard_max_bytes:file w_file_perms;
+allow init vendor_thinksmart_persist_file:dir mounton;
+allow init vendor_thinksmart_persist_file:file rename;
+allow init vendor_thinksmart_persist_file:chr_file unlink;

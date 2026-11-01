@@ -25,7 +25,8 @@ Boots to the Android UI with root ADB.
 | Full system suspend | Not working |
 
 OTA installation is not supported. This is an experimental userdebug build
-with permissive SELinux and verified boot disabled.
+with enforcing SELinux and verified boot disabled. The inherited userdebug
+`su` and `backuptool` domains remain permissive.
 
 ## Contents and requirements
 

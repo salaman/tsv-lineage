@@ -1,0 +1,2 @@
+type sysfs_thinksmart_mmc_stat, fs_type, sysfs_type;
+allow storaged sysfs_thinksmart_mmc_stat:file r_file_perms;

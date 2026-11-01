@@ -1,0 +1,2 @@
+# QRTR's in-kernel name service binds its control socket during module_init.
+allow dlkm_loader self:capability net_admin;

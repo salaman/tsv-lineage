@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 1 Nov 2026 20:45:00 +0000
+Subject: [PATCH] sepolicy: match TimeKeep's current application UID
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_hardware_sony_timekeep
+License: BSD-3-Clause (modified upstream sources)
+Base-commit: 07f619c12dd80052f865c51e5d8c77d860c68c64
+
+The current manifest does not request the system shared UID. The existing
+user=system rule therefore never selects vendor_timekeep_app, leaving the
+platform-signed receiver in platform_app without its RTC and time-adjust
+property access.
+
+Select the existing dedicated domain for the package's regular app UID,
+with normal application data labeling and per-app MLS categories. Reuse
+the existing domain permissions rather than granting them to platform_app.
+
+--- a/sepolicy/vendor/seapp_contexts
++++ b/sepolicy/vendor/seapp_contexts
+@@ -1 +1 @@
+-user=system seinfo=platform name=com.sony.timekeep domain=vendor_timekeep_app
++user=_app seinfo=platform name=com.sony.timekeep domain=vendor_timekeep_app type=app_data_file levelFrom=all

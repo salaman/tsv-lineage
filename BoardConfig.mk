@@ -43,8 +43,6 @@ BOARD_KERNEL_CMDLINE := \
     $(MAINLINE_QCOM_SOC_KERNEL_PARAMS) \
     androidboot.hardware=thinksmart \
     androidboot.verifiedbootstate=orange \
-    androidboot.selinux=permissive \
-    audit=0 \
     panic=0 \
     lk2nd.pass-simplefb=relocate,autorefresh
 
@@ -113,3 +111,4 @@ TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/config/fstab.thinksmart
 TARGET_RECOVERY_DENSITY := hdpi
 DEVICE_MANIFEST_FILE := $(DEVICE_PATH)/config/manifest.xml
 BOARD_VENDOR_SEPOLICY_DIRS += $(DEVICE_PATH)/sepolicy
+SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS += $(DEVICE_PATH)/sepolicy/private

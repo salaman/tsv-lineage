@@ -37,8 +37,7 @@ PRODUCT_PACKAGES += \
     fstab.thinksmart \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
-    init.recovery.thinksmart.rc \
-    use_memfd.rc
+    init.recovery.thinksmart.rc
 
 PRODUCT_PACKAGES_DEBUG += \
     fsverity \
@@ -66,7 +65,8 @@ PRODUCT_SOONG_NAMESPACES += \
 PRODUCT_SYSTEM_PROPERTIES += \
     debug.renderengine.backend=skiagl \
     ro.sf.lcd_density=160 \
-    persist.sys.zram_enabled=1
+    persist.sys.zram_enabled=1 \
+    sys.use_memfd=true
 
 PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.qcom.soc.enable_modem_services=0 \

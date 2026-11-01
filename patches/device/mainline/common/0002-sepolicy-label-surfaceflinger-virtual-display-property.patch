@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Christopher Paslawski <chris@paslawski.me>
+Date: Sun, 1 Nov 2026 19:45:00 +0000
+Subject: [PATCH] sepolicy: label SurfaceFlinger's virtual-display HWC option
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_device_mainline_common
+License: Apache-2.0 (modified upstream sources)
+Base-commit: f49f55117276cc2603fd7f6aeb78b859535f8e8d
+
+SurfaceFlinger reads vendor.display.vds_allow_hwc during initialization,
+even when the property is unset. Without a specific context the lookup
+attempts to map vendor_default_prop, which SurfaceFlinger cannot read.
+
+Assign this exact boolean to the existing public HWC configuration type
+and allow SurfaceFlinger to read that type. Do not grant access to the
+default vendor property bucket or change the option's default value.
+
+--- a/sepolicy/vendor/property_contexts
++++ b/sepolicy/vendor/property_contexts
+@@ -12,6 +12,7 @@ vendor.dlkm.modules.ready			u:object_r:vendor_dlkm_prop:s0 exact bool
+ 
+ # Graphics (drm_hwc)
+ vendor.hwc.drm.device		u:object_r:vendor_hwc_drm_prop:s0 exact string
++vendor.display.vds_allow_hwc	u:object_r:vendor_hwc_drm_prop:s0 exact bool
+ 
+ # Graphics (Mesa)
+ vendor.drm.gpu.vendor_name	u:object_r:vendor_mesa_prop:s0
+--- a/sepolicy/vendor/surfaceflinger.te
++++ b/sepolicy/vendor/surfaceflinger.te
+@@ -1 +1,2 @@
+ gpu_access(surfaceflinger)
++get_prop(surfaceflinger, vendor_hwc_drm_prop)
