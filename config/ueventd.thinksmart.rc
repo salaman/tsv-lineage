@@ -1,2 +1,5 @@
 /dev/iio:device* 0660 system system
 /sys/class/backlight/backlight bl_power 0660 system system
+
+# Keep device-node publication responsive during parallel APEX activation.
+parallel_ueventd_main_loop enabled

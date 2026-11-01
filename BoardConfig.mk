@@ -43,9 +43,17 @@ BOARD_KERNEL_CMDLINE := \
     $(MAINLINE_QCOM_SOC_KERNEL_PARAMS) \
     androidboot.hardware=thinksmart \
     androidboot.verifiedbootstate=orange \
+    androidboot.selinux=permissive \
+    audit=0 \
     panic=0 \
-    lk2nd.pass-simplefb=relocate,autorefresh \
-    console=tty0
+    lk2nd.pass-simplefb=relocate,autorefresh
+
+THINKSMART_BOOT_CONSOLE ?= false
+ifeq ($(THINKSMART_BOOT_CONSOLE),true)
+BOARD_KERNEL_CMDLINE += androidboot.serialconsole=1 console=tty0
+else
+BOARD_KERNEL_CMDLINE += androidboot.serialconsole=0 console=null
+endif
 
 BOARD_MESA3D_VULKAN_DRIVERS :=
 $(call soong_config_set,minigbm_upstream,platform,msm)

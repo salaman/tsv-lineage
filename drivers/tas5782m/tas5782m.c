@@ -281,15 +281,19 @@ static int tas5782m_cache_firmware(struct tas5782m_priv *priv)
 /* ========================================================================= */
 
 static int tas5782m_send_cfg(struct tas5782m_priv *priv,
-			     const u8 *data, size_t len)
+			     const u8 *data, size_t len, const char *stage)
 {
 	size_t i;
 	int ret;
 
 	for (i = 0; i + 1 < len; i += 2) {
 		ret = regmap_write(priv->regmap, data[i], data[i + 1]);
-		if (ret)
+		if (ret) {
+			dev_err(&priv->client->dev,
+				"%s register %#02x=%#02x at pair %zu failed (%d)\n",
+				stage, data[i], data[i + 1], i / 2, ret);
 			return ret;
+		}
 	}
 
 	return 0;
@@ -333,14 +337,16 @@ static void tas5782m_do_work(struct work_struct *work)
 	atomic_inc(&priv->dbg.n_play_attempted);
 #endif
 
-	ret = tas5782m_send_cfg(priv, tas5782m_dsp_init, tas5782m_dsp_init_len);
+	ret = tas5782m_send_cfg(priv, tas5782m_dsp_init, tas5782m_dsp_init_len,
+			       "preboot");
 	if (ret)
 		goto fail;
 
 	/* DSP needs ~5 ms to boot internally before accepting firmware blob */
 	usleep_range(5000, 15000);
 
-	ret = tas5782m_send_cfg(priv, priv->dsp_cfg_data, priv->dsp_cfg_len);
+	ret = tas5782m_send_cfg(priv, priv->dsp_cfg_data, priv->dsp_cfg_len,
+			       "DSP firmware");
 	if (ret)
 		goto fail;
 
@@ -350,8 +356,12 @@ static void tas5782m_do_work(struct work_struct *work)
 
 	/* The required board firmware ends in book 0/page 0. */
 	ret = tas5782m_write_traced(priv, TAS5782M_SIG_CH_CTRL, TAS5782M_CH_DAC_NORMAL);
-	if (ret)
+	if (ret) {
+		dev_err(&priv->client->dev,
+			"DAC activation register %#02x failed (%d)\n",
+			TAS5782M_SIG_CH_CTRL, ret);
 		goto fail;
+	}
 
 	priv->is_powered = true;
 	ret = tas5782m_refresh(priv);

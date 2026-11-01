@@ -2,8 +2,9 @@ DEVICE_PATH := device/lenovo/thinksmart
 
 TARGET_QCOM_SOC_FAMILY := msm8953
 TARGET_QCOM_SOC := apq8053
-TARGET_INITIAL_BRINGUP := true
+TARGET_INITIAL_BRINGUP := false
 TARGET_CONSOLE_AS_ROOT := false
+TARGET_ENABLE_FBKEYBOARD := false
 TARGET_GRAPHICS := mesa
 TARGET_GRAPHICS_EGL := mesa
 TARGET_GRAPHICS_VULKAN := none
@@ -37,12 +38,13 @@ PRODUCT_PACKAGES += \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
     init.recovery.thinksmart.rc \
-    use_memfd.rc \
+    use_memfd.rc
+
+PRODUCT_PACKAGES_DEBUG += \
+    fsverity \
     tinymix \
     tinycap \
     tinyplay
-
-PRODUCT_PACKAGES_DEBUG += fsverity
 
 DEVICE_PACKAGE_OVERLAYS += $(DEVICE_PATH)/overlays/overlay
 

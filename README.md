@@ -150,6 +150,10 @@ m bootimage recoveryimage systemimage vendorimage
 
 Images are written to `out/target/product/thinksmart`.
 
+Boots are quiet by default; ADB `logcat` and `dmesg` remain available.
+For on-screen boot diagnostics, export `THINKSMART_BOOT_CONSOLE=true` before
+`lunch` and rebuild the images.
+
 ## Installation
 
 **EDL partition writes only.** lk2nd fastboot writes have reported success while

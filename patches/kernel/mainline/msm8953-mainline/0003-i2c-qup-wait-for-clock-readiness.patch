@@ -12,9 +12,9 @@ I2C clock state to become idle or forced low between messages. Apply that
 readiness check before pausing a v2 PIO sub-transfer, with a bounded poll
 based on the bus bit period. Do not change DMA or final-message handling.
 
-This is a candidate for the ThinkSmart's initial write/read stall. Keep
-the existing transfer-timeout snapshot so unsuccessful trials retain
-their controller state.
+This remains a candidate fix for the ThinkSmart's initial write/read
+stall, not a confirmed fix for the sporadic amplifier initialization
+timeout.
 
 Origin: Local ThinkSmart View port
 Source: https://github.com/msm8953-mainline/linux
