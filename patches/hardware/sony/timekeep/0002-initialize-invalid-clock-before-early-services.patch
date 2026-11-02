@@ -1,0 +1,98 @@
+From: ThinkSmart mainline integration
+Subject: [PATCH] timekeep: initialize an invalid clock before early services
+
+The PMIC RTC is a raw counter and the saved TimeKeep adjustment is only
+available after userdata and persistent properties have been loaded. Before
+that, early Android services can delete files with Unix-epoch timestamps.
+On the stock metadata filesystem, e2fsck mistakes those small deletion
+timestamps for inode numbers in a corrupt orphan chain.
+
+Provide an explicitly requested initialization mode using the immutable
+vendor build date when the clock is still before 2000. Keep a valid clock
+unchanged and retain normal saved-offset restoration and network time.
+The device's early-init action synchronously runs this disabled service
+before other services start. No SELinux permission changes are needed.
+
+Source: https://github.com/LineageOS/android_hardware_sony_timekeep
+
+diff --git a/timekeep.c b/timekeep.c
+index de92ccd..4bb9d46 100644
+--- a/timekeep.c
++++ b/timekeep.c
+@@ -36,6 +36,7 @@
+ #include <unistd.h>
+ 
+ #include <sys/stat.h>
++#include <sys/time.h>
+ #include <time.h>
+ 
+ #define LOG_TAG "TimeKeep"
+@@ -162,15 +163,47 @@ int restore_time() {
+ 	return res;
+ }
+ 
++int initialize_time() {
++	const int64_t earliest_valid_time = 946684800; /* 2000-01-01 UTC */
++	time_t now = time(NULL);
++	if (now == (time_t)-1) {
++		int error = errno;
++		ALOGE("Failed to read the boot clock: %s", strerror(error));
++		return -error;
++	}
++	if (now >= earliest_valid_time)
++		return 0;
++
++	int64_t build_time = property_get_int64("ro.vendor.build.date.utc", 0);
++	if (build_time < earliest_valid_time ||
++	    (int64_t)(time_t)build_time != build_time) {
++		ALOGE("Invalid vendor build date for boot clock initialization");
++		return -EINVAL;
++	}
++
++	struct timeval tv = { .tv_sec = (time_t)build_time, .tv_usec = 0 };
++	if (settimeofday(&tv, NULL) != 0) {
++		int error = errno;
++		ALOGE("Failed to initialize the boot clock: %s", strerror(error));
++		return -error;
++	}
++	ALOGI("Initialized invalid boot clock from vendor build date");
++	return 0;
++}
++
+ int main(int argc, char* argv[]) {
+ 	int res = -1;
+ 	if (argc != 2) {
+-		ALOGI("usage: timekeep store|restore");
++		ALOGI("usage: timekeep initialize|store|restore");
+ 		return res;
+ 	}
+ 
+ 	// Keep CAP_SYS_TIME and drop to system user
+ 
++	if (strcmp(argv[1], "initialize") == 0) {
++		res = initialize_time();
++	}
++
+ 	if (strcmp(argv[1], "store") == 0) {
+ 		res = store_time();
+ 	}
+diff --git a/timekeep.rc b/timekeep.rc
+index bcbd585..fb77e66 100644
+--- a/timekeep.rc
++++ b/timekeep.rc
+@@ -3,6 +3,15 @@ on post-fs-data
+     mkdir /data/vendor/time 0770 system system
+     chmod 0770 /data/vendor/time/ats_2
+ 
++# Establish a sane epoch before services create and remove filesystem objects.
++service vendor.timekeep-initialize /vendor/bin/timekeep initialize
++    user system
++    group system
++    capabilities SYS_TIME
++    oneshot
++    disabled
++    task_profiles ServiceCapacityLow
++
+ # Time service
+ service vendor.timekeep-restore /vendor/bin/timekeep restore
+     class late_start

@@ -11,6 +11,7 @@ Boots to the Android UI with root ADB.
 | Hardware / feature | Status |
 |---|---|
 | Display and backlight | Working |
+| Touchscreen and single-tap screen wake | Working |
 | GPU acceleration | Working |
 | Wi-Fi | Working |
 | Bluetooth LE scanning | Working |

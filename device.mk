@@ -55,6 +55,7 @@ PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/config/thermal.json:$(TARGET_COPY_OUT_VENDOR)/etc/thermal.json \
     $(DEVICE_PATH)/permissions/thinksmart-core-hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/thinksmart-core-hardware.xml \
     $(DEVICE_PATH)/config/ueventd.thinksmart.rc:$(TARGET_COPY_OUT_VENDOR)/etc/ueventd.thinksmart.rc \
+    $(DEVICE_PATH)/config/generic_ft5x06__09_.idc:$(TARGET_COPY_OUT_VENDOR)/usr/idc/generic_ft5x06__09_.idc \
     frameworks/native/data/etc/android.hardware.sensor.light.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.light.xml \
     frameworks/native/data/etc/android.hardware.sensor.proximity.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.proximity.xml \
     frameworks/native/data/etc/android.hardware.touchscreen.multitouch.jazzhand.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.touchscreen.multitouch.jazzhand.xml
