@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] fs_mgr: decode e2fsck's wait status before checking exit bits
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_system_fs_fs_mgr
+Base-commit: f58ab8cf7115da90ba4db660cfdbf027de8fc872
+
+logwrap_fork_execvp returns the raw waitpid status through its status
+argument, not the child's exit code. An e2fsck exit code of 4 therefore
+arrives as 0x400. Testing that value against the e2fsck exit-code bits
+misses the uncorrected-error bit and skips the existing full-repair retry.
+The corrected-error bit is similarly missed.
+
+Decode normally exited children with WEXITSTATUS. Treat abnormal child
+termination as a failed check without interpreting signal bits as fsck
+results or retrying as though the child reported uncorrected errors.
+Preserve the existing preen/full-repair policy and raw-status diagnostics.
+
+--- a/fs_mgr.cpp
++++ b/fs_mgr.cpp
+@@ -306,12 +306,17 @@
+                 /* No need to check for error in fork, we can't really handle it now */
+                 LERROR << "Failed trying to run " << E2FSCK_BIN;
+                 *fs_stat |= FS_STAT_FSCK_FAILED;
++            } else if (!WIFEXITED(status)) {
++                LERROR << "e2fsck did not exit normally; status 0x" << std::hex << status;
++                *fs_stat |= FS_STAT_FSCK_FAILED;
+             } else if (status != 0) {
+                 LINFO << "e2fsck returned status 0x" << std::hex << status;
+-                bool corrected = (status & static_cast<int>(E2fsckExitCode::ERROR_CORRECTED)) != 0;
++                const int exit_code = WEXITSTATUS(status);
++                bool corrected =
++                        (exit_code & static_cast<int>(E2fsckExitCode::ERROR_CORRECTED)) != 0;
+                 bool uncorrected =
+-                        (status & static_cast<int>(E2fsckExitCode::ERROR_UNCORRECTED)) != 0;
++                        (exit_code & static_cast<int>(E2fsckExitCode::ERROR_UNCORRECTED)) != 0;
+                 if (corrected && !uncorrected) {
+                     // TODO: nobody seems to be checking this bit??
+                     *fs_stat |= FS_STAT_FSCK_FS_FIXED;
+                 } else if (uncorrected && !forced) {

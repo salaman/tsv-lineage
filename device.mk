@@ -34,6 +34,7 @@ TARGET_SCREEN_HEIGHT := 1280
 TARGET_BOOTANIMATION_HALF_RES := true
 
 PRODUCT_PACKAGES += \
+    e2fsck_ramdisk \
     fstab.thinksmart \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
