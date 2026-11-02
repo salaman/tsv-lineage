@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_defaults {
+    name: "thinksmart_health_defaults",
+    defaults: ["libhealth_aidl_impl_user"],
+    static_libs: ["libhealth_aidl_impl"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+}
+
+cc_defaults {
+    name: "thinksmart_health_service_defaults",
+    defaults: ["thinksmart_health_defaults"],
+    srcs: ["service.cpp"],
+    relative_install_path: "hw",
+    vintf_fragments: ["android.hardware.health-service.thinksmart.xml"],
+}
+
+cc_binary {
+    name: "android.hardware.health-service.thinksmart",
+    vendor: true,
+    defaults: ["thinksmart_health_service_defaults"],
+    init_rc: ["android.hardware.health-service.thinksmart.rc"],
+    overrides: ["charger"],
+}
+
+cc_binary {
+    name: "android.hardware.health-service.thinksmart_recovery",
+    recovery: true,
+    defaults: ["thinksmart_health_service_defaults"],
+    init_rc: ["android.hardware.health-service.thinksmart_recovery.rc"],
+    overrides: ["charger.recovery"],
+}
+
+cc_test {
+    name: "thinksmart_health_test",
+    vendor: true,
+    defaults: ["thinksmart_health_defaults"],
+    srcs: ["HealthTest.cpp"],
+}

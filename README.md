@@ -35,6 +35,7 @@ with enforcing SELinux and verified boot disabled. The inherited userdebug
 |---|---|
 | Device build definitions | Root `*.mk` and `Android.bp` |
 | Runtime configuration and firmware lists | `config/` |
+| Batteryless health HAL and device tests | `health/` |
 | Platform / mainline sources | LineageOS `lineage-24.0` plus [20-project local manifest](manifests/thinksmart.xml) |
 | Community kernel configuration | `upstream/xiaomi-mainline` Git submodule |
 | Maintained codec sources | `drivers/tas5782m`; copied with attribution and local fixes |

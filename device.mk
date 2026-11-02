@@ -14,6 +14,7 @@ TARGET_AUDIO_HAL := tinyhal
 TARGET_THERMAL_HAL := linaro-libpm
 TARGET_SENSORS_HAL := iio
 TARGET_HAS_BATTERY := false
+TARGET_HEALTH_HAL := none
 TARGET_HAS_IR := false
 TARGET_HAS_VIBRATOR := false
 TARGET_SUPPORTS_SUSPEND := false
@@ -34,6 +35,8 @@ TARGET_SCREEN_HEIGHT := 1280
 TARGET_BOOTANIMATION_HALF_RES := true
 
 PRODUCT_PACKAGES += \
+    android.hardware.health-service.thinksmart \
+    android.hardware.health-service.thinksmart_recovery \
     e2fsck_ramdisk \
     fstab.thinksmart \
     fstab.thinksmart.ramdisk \

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Text style leaves no icon or percentage when no battery is present. -->
+    <integer name="def_battery_style">2</integer>
+</resources>

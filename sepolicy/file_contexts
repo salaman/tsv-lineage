@@ -8,3 +8,5 @@
 
 /mnt/vendor/persist(/.*)? u:object_r:vendor_thinksmart_persist_file:s0
 /mnt/vendor/persist-overlayfs-(upperdir|workdir)(/.*)? u:object_r:vendor_thinksmart_persist_file:s0
+
+/vendor/bin/hw/android\.hardware\.health-service\.thinksmart u:object_r:hal_health_default_exec:s0
