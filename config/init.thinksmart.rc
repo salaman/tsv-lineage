@@ -14,3 +14,11 @@ on fs
 
 on late-fs
     mount_all /vendor/etc/fstab.thinksmart --late
+
+on post-fs-data
+    # Configure the board's sole loaded IIO sensor before class hal starts.
+    # Lenovo DSP profile: 75 mA setting, two pulses, 8T (driver ABI encoding).
+    wait /sys/devices/platform/i2c-sensors/i2c-0/0-0051/iio:device0/in_proximity_integration_time 10
+    write /sys/devices/platform/i2c-sensors/i2c-0/0-0051/iio:device0/in_proximity_calibbias 0.075000
+    write /sys/devices/platform/i2c-sensors/i2c-0/0-0051/iio:device0/in_proximity_oversampling_ratio 2
+    write /sys/devices/platform/i2c-sensors/i2c-0/0-0051/iio:device0/in_proximity_integration_time 0.000768

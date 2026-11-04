@@ -93,8 +93,8 @@ PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.iio.proximity.max_range=5 \
     ro.vendor.iio.proximity.resolution=5 \
     ro.vendor.iio.proximity.max_freq=2 \
-    ro.vendor.iio.proximity.near_level=3 \
-    ro.vendor.iio.proximity.far_level=2 \
+    ro.vendor.iio.proximity.near_level=0.875 \
+    ro.vendor.iio.proximity.far_level=0.625 \
     ro.vendor.iio.proximity.quirks=no-event,no-trig
 
 include $(DEVICE_PATH)/config/firmware-files.mk
