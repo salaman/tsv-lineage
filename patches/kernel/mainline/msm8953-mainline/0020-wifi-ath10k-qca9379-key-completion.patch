@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 4 Nov 2026 14:32:02 -0800
+Subject: [PATCH] wifi: ath10k: avoid absent QCA9379 SDIO key completions
+
+The earlier 6.19 ThinkSmart port's logs show periodic group-key SET
+timeouts followed by deauthentication, and group/pairwise removal
+timeouts when roaming. Jetha Chan attributes these, for QCA9379 SDIO
+firmware WLAN.NPL.1.6-00163-QCANPLSWPZ-1, to missing HTT security
+indications, noting that initial association key installs do not time
+out. The logs establish those timeouts, but are not an HTT event trace
+proving that replacement/removal indications are absent rather than
+late. This firmware-event behavior remains a qualification assumption.
+
+Adapt Jetha Chan's hardware-scoped workaround. Keep sending the existing
+WMI commands, propagate their errors, and bypass the completion wait for
+removals only on QCA9379 SDIO. Pairwise installs and AP/IBSS group-key
+installs still wait; no other hardware is changed.
+
+Unlike the source patch, keep waiting for the first station GTK on a
+peer. Its security indication initializes the multicast security type
+and PN length, as well as completing the command. Skipping that wait
+could also let its late indication complete a subsequent install.
+Bypass only a same-cipher GTK replacement after a successful install
+and initialization of the peer's multicast security metadata.
+
+Remember the successful GTK's exact cipher across DISABLE_KEY:
+mac80211 can remove the old GTK before setting its replacement, leaving
+no key pointer to inspect. A sec_type-only guard would also survive
+removal, but cannot distinguish CCMP from CCMP-256; both use the same
+HTT security type. The retained cipher keeps such changes on the
+conservative waiting path. It is per-peer, zeroed on allocation and
+discarded on peer deletion, not retained globally across roaming.
+Reassociation without peer teardown retains it; this is a per-peer,
+not per-association, guard and needs runtime coverage.
+
+Limit this to CCMP/CCMP-256 and TKIP, whose HTT security types are defined
+by this driver; unknown ciphers and cipher changes retain the existing
+wait. WEP and transmit-usage keys always retain install waits, including
+mac80211's dual group/pairwise static-WEP upload.
+
+When a GTK replacement does not produce an indication, reset the host
+per-TID replay state under data_lock as the indication handler would,
+without changing the already initialized multicast security metadata.
+Removals do not reset PN state. This does not fix ath10k's existing
+shared, non-key-indexed high-latency replay state: overlapping old/new
+GTK traffic still needs runtime qualification.
+
+The source port verified probe and scanning but explicitly deferred the
+authenticated rekey/roam tests. This adaptation is source-validated, not
+a claim of completed on-device qualification. It assumes the reported
+no-indication behavior of the named stock firmware, not arbitrary future
+QCA9379 firmware; unexpected late indications could still complete a
+later wait. No firmware feature bits or board data are changed.
+
+Source: https://github.com/jethac/lenovo-thinksmart-view/blob/1f99f7f09c26074d53064d7bb1fada262cbef10a/kernel/patches/0101-wifi-ath10k-don-t-wait-for-security-indications-QCA9379-SDIO-does-not-send.patch
+Link: https://github.com/rickx/ubuntu-thinksmart/blob/7b1a5f3e6b3cd85d10a2f81a56c0e778548375bd/research/wifi/inventories/dmesg-ath10k.txt
+Kernel-source: https://github.com/msm8953-mainline/linux
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+---
+diff --git a/drivers/net/wireless/ath/ath10k/core.c b/drivers/net/wireless/ath/ath10k/core.c
+--- a/drivers/net/wireless/ath/ath10k/core.c
++++ b/drivers/net/wireless/ath/ath10k/core.c
+@@ -697,6 +697,7 @@ static const struct ath10k_hw_params ath10k_hw_params_list[] = {
+ 		.use_fw_tx_credits = true,
+ 		.delay_unmap_buffer = false,
+ 		.mcast_frame_registration = false,
++		.key_update_no_sec_ind = true,
+ 	},
+ 	{
+ 		.id = QCA4019_HW_1_0_DEV_VERSION,
+diff --git a/drivers/net/wireless/ath/ath10k/core.h b/drivers/net/wireless/ath/ath10k/core.h
+--- a/drivers/net/wireless/ath/ath10k/core.h
++++ b/drivers/net/wireless/ath/ath10k/core.h
+@@ -432,6 +432,8 @@ struct ath10k_peer {
+ 
+ 	/* protected by ar->data_lock */
+ 	struct ieee80211_key_conf *keys[WMI_MAX_KEY_INDEX + 1];
++	/* Retained across GTK removal for the QCA9379 SDIO completion quirk. */
++	u32 last_gtk_cipher;
+ 	union htt_rx_pn_t tids_last_pn[ATH10K_TXRX_NUM_EXT_TIDS];
+ 	bool tids_last_pn_valid[ATH10K_TXRX_NUM_EXT_TIDS];
+ 	union htt_rx_pn_t frag_tids_last_pn[ATH10K_TXRX_NUM_EXT_TIDS];
+diff --git a/drivers/net/wireless/ath/ath10k/hw.h b/drivers/net/wireless/ath/ath10k/hw.h
+--- a/drivers/net/wireless/ath/ath10k/hw.h
++++ b/drivers/net/wireless/ath/ath10k/hw.h
+@@ -649,6 +649,9 @@ struct ath10k_hw_params {
+ 
+ 	/* The hardware support multicast frame registrations */
+ 	bool mcast_frame_registration;
++
++	/* Quirk for reportedly absent GTK update and removal indications. */
++	bool key_update_no_sec_ind;
+ };
+ 
+ struct htt_resp;
+diff --git a/drivers/net/wireless/ath/ath10k/mac.c b/drivers/net/wireless/ath/ath10k/mac.c
+--- a/drivers/net/wireless/ath/ath10k/mac.c
++++ b/drivers/net/wireless/ath/ath10k/mac.c
+@@ -304,6 +304,74 @@ static int ath10k_send_key(struct ath10k_vif *arvif,
+ 	return ath10k_wmi_vdev_install_key(arvif->ar, &arg);
+ }
+ 
++static bool ath10k_mac_key_has_sec_ind(struct ath10k_vif *arvif,
++				       struct ieee80211_key_conf *key,
++				       enum set_key_cmd cmd,
++				       const u8 *macaddr, u32 flags)
++{
++	struct ath10k *ar = arvif->ar;
++	struct ath10k_peer *peer;
++	enum htt_security_types sec_type;
++	bool wait = true;
++
++	if (!ar->hw_params.key_update_no_sec_ind)
++		return true;
++
++	if (cmd == DISABLE_KEY)
++		return false;
++
++	if (arvif->vdev_type != WMI_VDEV_TYPE_STA ||
++	    !(flags & WMI_KEY_GROUP) || (flags & WMI_KEY_TX_USAGE))
++		return true;
++
++	/* The first GTK indication must initialize multicast RX security.
++	 * Restrict the missing-indication workaround to same-cipher updates.
++	 * WEP keys can also be used for TX and must retain their install wait.
++	 */
++	spin_lock_bh(&ar->data_lock);
++	peer = ath10k_peer_find(ar, arvif->vdev_id, macaddr);
++	if (peer && peer->last_gtk_cipher == key->cipher) {
++		sec_type = peer->rx_pn[HTT_TXRX_SEC_MCAST].sec_type;
++		switch (key->cipher) {
++		case WLAN_CIPHER_SUITE_CCMP:
++		case WLAN_CIPHER_SUITE_CCMP_256:
++			wait = sec_type != HTT_SECURITY_AES_CCMP;
++			break;
++		case WLAN_CIPHER_SUITE_TKIP:
++			wait = sec_type != HTT_SECURITY_TKIP &&
++			       sec_type != HTT_SECURITY_TKIP_NOMIC;
++			break;
++		default:
++			break;
++		}
++	}
++	spin_unlock_bh(&ar->data_lock);
++
++	return wait;
++}
++
++static void ath10k_mac_sta_gtk_set_done(struct ath10k_vif *arvif,
++					struct ieee80211_key_conf *key,
++					const u8 *addr, bool reset_pn)
++{
++	struct ath10k *ar = arvif->ar;
++	struct ath10k_peer *peer;
++
++	spin_lock_bh(&ar->data_lock);
++	peer = ath10k_peer_find(ar, arvif->vdev_id, addr);
++	if (peer) {
++		peer->last_gtk_cipher = key->cipher;
++		if (reset_pn) {
++			/* Match ath10k_htt_rx_sec_ind_handler(). */
++			memset(peer->tids_last_pn_valid, 0,
++			       sizeof(peer->tids_last_pn_valid));
++			memset(peer->tids_last_pn, 0,
++			       sizeof(peer->tids_last_pn));
++		}
++	}
++	spin_unlock_bh(&ar->data_lock);
++}
++
+ static int ath10k_install_key(struct ath10k_vif *arvif,
+ 			      struct ieee80211_key_conf *key,
+ 			      enum set_key_cmd cmd,
+@@ -311,6 +379,7 @@ static int ath10k_install_key(struct ath10k_vif *arvif,
+ {
+ 	struct ath10k *ar = arvif->ar;
+ 	int ret;
++	bool wait_for_sec_ind;
+ 	unsigned long time_left;
+ 
+ 	lockdep_assert_held(&ar->conf_mutex);
+@@ -320,13 +389,28 @@ static int ath10k_install_key(struct ath10k_vif *arvif,
+ 	if (arvif->nohwcrypt)
+ 		return 1;
+ 
++	wait_for_sec_ind = ath10k_mac_key_has_sec_ind(arvif, key, cmd,
++						      macaddr, flags);
+ 	ret = ath10k_send_key(arvif, key, cmd, macaddr, flags);
+ 	if (ret)
+ 		return ret;
+ 
++	if (!wait_for_sec_ind) {
++		ath10k_dbg(ar, ATH10K_DBG_MAC,
++			   "mac vdev %d %s key %d for %pM without waiting for sec ind\n",
++			   arvif->vdev_id, cmd == SET_KEY ? "set" : "del",
++			   key->keyidx, macaddr);
++	} else {
++		time_left = wait_for_completion_timeout(&ar->install_key_done,
++							3 * HZ);
++		if (time_left == 0)
++			return -ETIMEDOUT;
++	}
++
+-	time_left = wait_for_completion_timeout(&ar->install_key_done, 3 * HZ);
+-	if (time_left == 0)
+-		return -ETIMEDOUT;
++	if (ar->hw_params.key_update_no_sec_ind && cmd == SET_KEY &&
++	    arvif->vdev_type == WMI_VDEV_TYPE_STA && (flags & WMI_KEY_GROUP))
++		ath10k_mac_sta_gtk_set_done(arvif, key, macaddr,
++					    !wait_for_sec_ind);
+ 
+ 	return 0;
+ }

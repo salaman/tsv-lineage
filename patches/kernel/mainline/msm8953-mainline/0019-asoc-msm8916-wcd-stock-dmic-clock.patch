@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 4 Nov 2026 14:32:02 -0800
+Subject: [PATCH] ASoC: msm8916-wcd: configure stock ThinkSmart DMIC clocks
+
+The vendor ThinkSmart View device tree requests a 2.4 MHz DMIC clock.
+Add the matching board clock limit and binding, select the fastest MCLK
+divider that respects it, and program both the shared generator and each
+powered decimator consistently. Decimator clock selection follows the
+decimator rather than a DMIC widget's line number, so either input mux
+routing works. Preserve MCLK/3 on boards without the new property.
+
+Combine the reference port's four DMIC patches, including its credit to
+justhalfbit for finding the per-decimator clock-selection issue. Retain
+our existing Android channel routing, mixer gain and speaker driver.
+
+Local adjustments reject malformed/out-of-range limits and unavailable
+MCLK or an unachievable ceiling instead of silently exceeding it. Use a
+wide multiplication when comparing rates, and propagate clock-register
+write failures from the DAPM events.
+
+Origin: Jetha Chan's ThinkSmart View DMIC series, with local validation
+Source: https://github.com/jethac/lenovo-thinksmart-view/tree/1f99f7f09c26074d53064d7bb1fada262cbef10a/kernel/patches
+Reference-revisions: 980e96b10c06534901bb403906c1228ac016718c
+                    8bcced4a2833e6484dbccfe5c5d179a23c269291
+                    aabb1c7b94f23ec8fda017f3e2d12b57c5705dd6
+                    30b69dc186219443daaf0c75097c2735248a81dc
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+Apply in filename order within this project.
+
+---
+diff --git a/Documentation/devicetree/bindings/sound/qcom,msm8916-wcd-digital-codec.yaml b/Documentation/devicetree/bindings/sound/qcom,msm8916-wcd-digital-codec.yaml
+--- a/Documentation/devicetree/bindings/sound/qcom,msm8916-wcd-digital-codec.yaml
++++ b/Documentation/devicetree/bindings/sound/qcom,msm8916-wcd-digital-codec.yaml
+@@ -36,6 +36,15 @@
+   '#sound-dai-cells':
+     const: 1
+ 
++  qcom,dmic-sample-rate:
++    description:
++      Highest DMIC clock rate in Hz the microphones can take. The codec
++      uses the fastest MCLK divider (2, 3, 4, 6 or 16) whose output does
++      not exceed it. If absent, the DMIC clock remains MCLK / 3.
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 600000
++    maximum: 6144000
++
+ required:
+   - compatible
+   - reg
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -423,6 +423,10 @@
+ 
+ &lpass {
+ 	status = "okay";
++};
++
++&lpass_codec {
++	qcom,dmic-sample-rate = <2400000>;
+ };
+ 
+ &wcd_codec {
+diff --git a/sound/soc/codecs/msm8916-wcd-digital.c b/sound/soc/codecs/msm8916-wcd-digital.c
+--- a/sound/soc/codecs/msm8916-wcd-digital.c
++++ b/sound/soc/codecs/msm8916-wcd-digital.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ 
++#include <linux/bitfield.h>
+ #include <linux/module.h>
+ #include <linux/err.h>
+ #include <linux/kernel.h>
+@@ -226,6 +227,7 @@
+ 
+ struct msm8916_wcd_digital_priv {
+ 	struct clk *ahbclk, *mclk;
++	u32 dmic_clk_rate;
+ };
+ 
+ static const unsigned long rx_gain_reg[] = {
+@@ -594,21 +596,52 @@
+ 	return 0;
+ }
+ 
++static int msm8916_wcd_digital_dmic_clk_sel(struct snd_soc_component *component)
++{
++	static const unsigned int divs[] = { 2, 3, 4, 6, 16 };
++	struct msm8916_wcd_digital_priv *priv = snd_soc_component_get_drvdata(component);
++	unsigned long mclk_rate;
++	unsigned int sel;
++
++	if (!priv->dmic_clk_rate)
++		return TXN_DMIC_CTL_CLK_SEL_DIV3;
++
++	mclk_rate = clk_get_rate(priv->mclk);
++	if (!mclk_rate) {
++		dev_err(component->dev, "Cannot select DMIC clock without MCLK\n");
++		return -EINVAL;
++	}
++
++	for (sel = 0; sel < ARRAY_SIZE(divs); sel++)
++		if (mclk_rate <= (u64)priv->dmic_clk_rate * divs[sel])
++			return sel;
++
++	dev_err(component->dev, "Cannot divide MCLK %lu below DMIC limit %u\n",
++		mclk_rate, priv->dmic_clk_rate);
++	return -EINVAL;
++}
++
+ static int msm8916_wcd_digital_enable_dec(struct snd_soc_dapm_widget *w,
+ 					  struct snd_kcontrol *kcontrol,
+ 					  int event)
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+ 	unsigned int decimator = w->shift + 1;
+-	u16 dec_reset_reg, tx_vol_ctl_reg, tx_mux_ctl_reg;
++	u16 dec_reset_reg, tx_vol_ctl_reg, tx_mux_ctl_reg, tx_dmic_ctl_reg;
+ 	u8 dec_hpf_cut_of_freq;
++	int dmic_clk_sel, ret;
+ 
+ 	dec_reset_reg = LPASS_CDC_CLK_TX_RESET_B1_CTL;
+ 	tx_vol_ctl_reg = LPASS_CDC_TX1_VOL_CTL_CFG + 32 * (decimator - 1);
+ 	tx_mux_ctl_reg = LPASS_CDC_TX1_MUX_CTL + 32 * (decimator - 1);
++	tx_dmic_ctl_reg = LPASS_CDC_TX1_DMIC_CTL + 32 * (decimator - 1);
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
++		dmic_clk_sel = msm8916_wcd_digital_dmic_clk_sel(component);
++		if (dmic_clk_sel < 0)
++			return dmic_clk_sel;
++
+ 		/* Enable TX digital mute */
+ 		snd_soc_component_update_bits(component, tx_vol_ctl_reg,
+ 				    TX_VOL_CTL_CFG_MUTE_EN_MASK,
+@@ -622,6 +655,12 @@
+ 					    TX_MUX_CTL_CUT_OFF_FREQ_MASK,
+ 					    TX_MUX_CTL_CF_NEG_3DB_150HZ);
+ 		}
++		/* The clock select belongs to the decimator, not its DMIC input. */
++		ret = snd_soc_component_update_bits(component, tx_dmic_ctl_reg,
++						   TXN_DMIC_CTL_CLK_SEL_MASK,
++						   dmic_clk_sel);
++		if (ret < 0)
++			return ret;
+ 		break;
+ 	case SND_SOC_DAPM_POST_PMU:
+ 		/* enable HPF */
+@@ -662,38 +701,20 @@
+ 					   int event)
+ {
+ 	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+-	unsigned int dmic;
+-	int ret;
+-	/* get dmic number out of widget name */
+-	char *dmic_num = strpbrk(w->name, "12");
+-
+-	if (dmic_num == NULL) {
+-		dev_err(component->dev, "Invalid DMIC\n");
+-		return -EINVAL;
+-	}
+-	ret = kstrtouint(dmic_num, 10, &dmic);
+-	if (ret < 0 || dmic > 2) {
+-		dev_err(component->dev, "Invalid DMIC line on the component\n");
+-		return -EINVAL;
+-	}
++	int dmic_clk_sel, ret;
+ 
+ 	switch (event) {
+ 	case SND_SOC_DAPM_PRE_PMU:
+-		snd_soc_component_update_bits(component, LPASS_CDC_CLK_DMIC_B1_CTL,
+-				    DMIC_B1_CTL_DMIC0_CLK_SEL_MASK,
+-				    DMIC_B1_CTL_DMIC0_CLK_SEL_DIV3);
+-		switch (dmic) {
+-		case 1:
+-			snd_soc_component_update_bits(component, LPASS_CDC_TX1_DMIC_CTL,
+-					    TXN_DMIC_CTL_CLK_SEL_MASK,
+-					    TXN_DMIC_CTL_CLK_SEL_DIV3);
+-			break;
+-		case 2:
+-			snd_soc_component_update_bits(component, LPASS_CDC_TX2_DMIC_CTL,
+-					    TXN_DMIC_CTL_CLK_SEL_MASK,
+-					    TXN_DMIC_CTL_CLK_SEL_DIV3);
+-			break;
+-		}
++		dmic_clk_sel = msm8916_wcd_digital_dmic_clk_sel(component);
++		if (dmic_clk_sel < 0)
++			return dmic_clk_sel;
++
++		ret = snd_soc_component_update_bits(component, LPASS_CDC_CLK_DMIC_B1_CTL,
++						   DMIC_B1_CTL_DMIC0_CLK_SEL_MASK,
++						   FIELD_PREP(DMIC_B1_CTL_DMIC0_CLK_SEL_MASK,
++							      dmic_clk_sel));
++		if (ret < 0)
++			return ret;
+ 		break;
+ 	}
+ 
+@@ -1172,6 +1193,16 @@
+ 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+ 	if (!priv)
+ 		return -ENOMEM;
++
++	if (of_property_present(dev->of_node, "qcom,dmic-sample-rate")) {
++		ret = of_property_read_u32(dev->of_node, "qcom,dmic-sample-rate",
++					   &priv->dmic_clk_rate);
++		if (ret)
++			return dev_err_probe(dev, ret, "Invalid DMIC clock property\n");
++		if (priv->dmic_clk_rate < 600000 || priv->dmic_clk_rate > 6144000)
++			return dev_err_probe(dev, -EINVAL, "Invalid DMIC clock limit %u\n",
++					     priv->dmic_clk_rate);
++	}
+ 
+ 	base = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(base))
