@@ -92,6 +92,7 @@ BOARD_VENDOR_KERNEL_MODULES_LOAD := \
     edt-ft5x06.ko \
     himax_hx83112b.ko \
     vcnl4000.ko \
+    bmc150-accel-i2c.ko \
     venus-core.ko \
     venus-dec.ko \
     venus-enc.ko \

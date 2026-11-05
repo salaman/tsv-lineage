@@ -1,0 +1,188 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 4 Nov 2026 16:49:58 -0800
+Subject: [PATCH] sensors: iio: honor shared-axis mounting and driver quirks
+
+BMC150 exposes its direction-shared mounting matrix as in_mount_matrix.
+Read this standard IIO attribute after a type-specific matrix and before
+the legacy mount_matrix fallback, so the existing sample transform uses
+the board's device-tree orientation.
+
+Read the driver name before applying quirks and other initial settings.
+Otherwise driver-specific properties only work after their first use;
+in particular, a BMA253 die-temperature channel cannot be excluded from
+Android ambient-temperature enumeration using its driver-specific quirk.
+
+Exercise matrix lookup precedence, legacy fallback, axis correction and
+driver-specific quirks with process-local property/sysfs overrides. No
+test writes to the device property service or sensor registers.
+
+Origin: Local ThinkSmart View port
+Source: https://github.com/LineageOS/android_hardware_intel_sensors-iio
+Base-commit: b5134567f8b8bce819b3686d045acfc120e0159f
+Apply in filename order within this project.
+
+---
+diff --git a/Android.bp b/Android.bp
+--- a/Android.bp
++++ b/Android.bp
+@@ -83,6 +83,7 @@
+ cc_test {
+     name: "sensors_iio_sample_test",
+     defaults: ["intel_sensors_iio_cc_defaults"],
++    ldflags: ["-Wl,--wrap=sysfs_read_str"],
+     srcs: [
+         ":sensors_iio_srcs",
+         "sample_test.cpp",
+diff --git a/common.h b/common.h
+--- a/common.h
++++ b/common.h
+@@ -48,6 +48,7 @@
+ #define ILLUMINATION_CALIBPATH	BASE_PATH "in_illuminance_calibscale"
+ #define SENSOR_CALIB_BIAS_PATH	BASE_PATH "in_%s_calibbias"
+ #define MOUNTING_MATRIX_PATH	BASE_PATH "mount_matrix"
++#define DIR_MOUNT_MATRIX_PATH	BASE_PATH "in_mount_matrix"
+ #define DEV_MOUNT_MATRIX_PATH	BASE_PATH "in_%s_mount_matrix"
+ 
+ #define CONFIGFS_TRIGGER_PATH	"/sys/kernel/config/iio/triggers/"
+diff --git a/description.c b/description.c
+--- a/description.c
++++ b/description.c
+@@ -555,6 +555,11 @@
+ 
+ 	err = sysfs_read_str(mm_path, mm_buf, sizeof(mm_buf));
+ 	if (err < 0) {
++		sprintf(mm_path, DIR_MOUNT_MATRIX_PATH, dev_num);
++		err = sysfs_read_str(mm_path, mm_buf, sizeof(mm_buf));
++	}
++
++	if (err < 0) {
+ 		sprintf(mm_path, MOUNTING_MATRIX_PATH, dev_num);
+ 
+ 		err = sysfs_read_str(mm_path, mm_buf, sizeof(mm_buf));
+diff --git a/enumeration.c b/enumeration.c
+--- a/enumeration.c
++++ b/enumeration.c
+@@ -557,6 +557,10 @@
+         else
+                 sensor[s].num_channels = num_channels;
+ 
++	/* Driver-specific properties also apply to quirks and early setup. */
++	sprintf(sysfs_path, NAME_PATH, dev_num);
++	sysfs_read_str(sysfs_path, sensor[s].internal_name, INTERNAL_NAME_SIZE);
++
+ 	/* Populate the quirks array */
+ 	sensor_get_quirks(s);
+ 
+@@ -616,10 +620,6 @@
+                         ALOGE("Failed to set buffer length on dev%d", dev_num);
+                 }
+         }
+-
+-	/* Read name attribute, if available */
+-	sprintf(sysfs_path, NAME_PATH, dev_num);
+-	sysfs_read_str(sysfs_path, sensor[s].internal_name, INTERNAL_NAME_SIZE);
+ 
+ 	if (sensor_type == SENSOR_TYPE_PROXIMITY &&
+ 	    !sensor_get_fl_prop(s, "near_level", &sensor[s].proximity_near_level)) {
+diff --git a/sample_test.cpp b/sample_test.cpp
+--- a/sample_test.cpp
++++ b/sample_test.cpp
+@@ -22,6 +22,18 @@
+ }
+ 
+ static std::map<std::string, std::string> property_overrides;
++static std::map<std::string, std::string> sysfs_overrides;
++
++extern "C" int __real_sysfs_read_str(const char* path, char* buffer, int length);
++
++extern "C" int __wrap_sysfs_read_str(const char* path, char* buffer, int length) {
++    const auto value = sysfs_overrides.find(path);
++    if (value == sysfs_overrides.end()) {
++        return __real_sysfs_read_str(path, buffer, length);
++    }
++    strlcpy(buffer, value->second.c_str(), length);
++    return std::strlen(buffer);
++}
+ 
+ // Keep test properties process-local; never modify the device property service.
+ extern "C" int property_get(const char* key, char* value, const char* default_value) {
+@@ -220,3 +232,78 @@
+     ASSERT_EQ(sensor_get_opt_scale(0, 1, &factor), 0);
+     EXPECT_FLOAT_EQ(factor, -1);
+ }
++
++class MountMatrixTest : public OptScaleTest {
++protected:
++    void SetUp() override {
++        OptScaleTest::SetUp();
++        ASSERT_TRUE(select_sensor(SENSOR_TYPE_ACCELEROMETER));
++        sensor[0].dev_num = -1;
++        sysfs_overrides.clear();
++    }
++
++    void TearDown() override {
++        sysfs_overrides.clear();
++        OptScaleTest::TearDown();
++    }
++};
++
++TEST_F(MountMatrixTest, SharedInputMatrixCorrectsAllThreeAndroidAxes) {
++    sysfs_overrides["/sys/bus/iio/devices/iio:device-1/in_mount_matrix"] =
++            "-1, 0, 0; 0, -1, 0; 0, 0, 1";
++    ASSERT_EQ(sensor_get_mounting_matrix(0, sensor[0].mounting_matrix), 1);
++    sensor[0].quirks |= QUIRK_MOUNTING_MATRIX;
++    const float raw[][3] = {{0, -9.80665f, 0}, {9.80665f, 0, 0}, {0, 0, 9.80665f}};
++    const float expected[][3] = {{0, 9.80665f, 0}, {-9.80665f, 0, 0}, {0, 0, 9.80665f}};
++    for (int pose = 0; pose < 3; ++pose) {
++        sensors_event_t event{};
++        std::copy(raw[pose], raw[pose] + 3, event.data);
++        ASSERT_EQ(sensor[0].ops.finalize(0, &event), 1);
++        for (int axis = 0; axis < 3; ++axis) {
++            EXPECT_FLOAT_EQ(event.data[axis], expected[pose][axis]);
++        }
++    }
++}
++
++TEST_F(MountMatrixTest, TypeSpecificMatrixTakesPrecedence) {
++    sysfs_overrides["/sys/bus/iio/devices/iio:device-1/in_accel_mount_matrix"] =
++            "1, 0, 0; 0, 1, 0; 0, 0, 1";
++    sysfs_overrides["/sys/bus/iio/devices/iio:device-1/in_mount_matrix"] =
++            "-1, 0, 0; 0, -1, 0; 0, 0, 1";
++    float matrix[9]{};
++    ASSERT_EQ(sensor_get_mounting_matrix(0, matrix), 1);
++    EXPECT_FLOAT_EQ(matrix[0], 1);
++    EXPECT_FLOAT_EQ(matrix[4], 1);
++    EXPECT_FLOAT_EQ(matrix[8], 1);
++}
++
++TEST_F(MountMatrixTest, LegacyMatrixStillWorks) {
++    sysfs_overrides["/sys/bus/iio/devices/iio:device-1/mount_matrix"] =
++            "-1, 0, 0; 0, -1, 0; 0, 0, 1";
++    float matrix[9]{};
++    ASSERT_EQ(sensor_get_mounting_matrix(0, matrix), 1);
++    EXPECT_FLOAT_EQ(matrix[0], -1);
++    EXPECT_FLOAT_EQ(matrix[4], -1);
++    EXPECT_FLOAT_EQ(matrix[8], 1);
++}
++
++TEST_F(MountMatrixTest, MissingMatrixLeavesCorrectionDisabled) {
++    float matrix[9]{};
++    EXPECT_EQ(sensor_get_mounting_matrix(0, matrix), 0);
++}
++
++TEST_F(MountMatrixTest, DieTemperatureQuirksDoNotDisableAccelerometer) {
++    std::strcpy(sensor[0].internal_name, "bma253");
++    property_overrides["ro.vendor.iio.temp.bma253.quirks"] = "no-poll,no-trig,no-event";
++    property_overrides["ro.vendor.iio.accel.quirks"] = "continuous";
++    sensor[0].quirks = 0;
++    EXPECT_EQ(sensor_get_quirks(0) &
++              (QUIRK_NO_POLL_MODE | QUIRK_NO_TRIG_MODE | QUIRK_NO_EVENT_MODE), 0u);
++    EXPECT_NE(sensor[0].quirks & QUIRK_FORCE_CONTINUOUS, 0u);
++    ASSERT_TRUE(select_sensor(SENSOR_TYPE_AMBIENT_TEMPERATURE));
++    sensor[0].quirks = 0;
++    EXPECT_EQ(sensor_get_quirks(0) &
++              (QUIRK_NO_POLL_MODE | QUIRK_NO_TRIG_MODE | QUIRK_NO_EVENT_MODE),
++              static_cast<uint32_t>(QUIRK_NO_POLL_MODE | QUIRK_NO_TRIG_MODE |
++                                    QUIRK_NO_EVENT_MODE));
++}

@@ -17,12 +17,12 @@ Boots to the Android UI with root ADB.
 | Bluetooth LE scanning | Working |
 | Audio streaming and microphone capture | Working |
 | Ambient-light and proximity sensor readings | Working |
+| Accelerometer | Working |
 | Thermal sensors | Working |
 | RTC | Working |
 | Internal storage | Working |
 | Hardware AVC/H.264 and HEVC/H.265 decoding | Working |
 | Camera | Not working |
-| Accelerometer | Not working |
 | Full system suspend | Not working |
 
 OTA installation is not supported. This is an experimental userdebug build

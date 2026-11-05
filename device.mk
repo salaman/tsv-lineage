@@ -59,6 +59,7 @@ PRODUCT_COPY_FILES += \
     $(DEVICE_PATH)/permissions/thinksmart-core-hardware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/thinksmart-core-hardware.xml \
     $(DEVICE_PATH)/config/ueventd.thinksmart.rc:$(TARGET_COPY_OUT_VENDOR)/etc/ueventd.thinksmart.rc \
     $(DEVICE_PATH)/config/generic_ft5x06__09_.idc:$(TARGET_COPY_OUT_VENDOR)/usr/idc/generic_ft5x06__09_.idc \
+    frameworks/native/data/etc/android.hardware.sensor.accelerometer.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.accelerometer.xml \
     frameworks/native/data/etc/android.hardware.sensor.light.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.light.xml \
     frameworks/native/data/etc/android.hardware.sensor.proximity.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.sensor.proximity.xml \
     frameworks/native/data/etc/android.hardware.touchscreen.multitouch.jazzhand.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.touchscreen.multitouch.jazzhand.xml
@@ -81,6 +82,13 @@ PRODUCT_VENDOR_PROPERTIES += \
     debug.stagefright.c2-poolmask=0xfe0000
 
 PRODUCT_VENDOR_PROPERTIES += \
+    ro.vendor.iio.accel.name=BMA253_Accelerometer \
+    ro.vendor.iio.accel.vendor=Bosch \
+    ro.vendor.iio.accel.max_range=39.2266 \
+    ro.vendor.iio.accel.resolution=0.019154 \
+    ro.vendor.iio.accel.max_freq=125 \
+    ro.vendor.iio.accel.quirks=continuous \
+    ro.vendor.iio.temp.bma253.quirks=no-poll,no-trig,no-event \
     ro.vendor.iio.illuminance.name=VCNL4200_ALS \
     ro.vendor.iio.illuminance.vendor=Vishay \
     ro.vendor.iio.illuminance.opt_scale=12.5 \
