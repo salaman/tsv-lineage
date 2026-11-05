@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 4 Nov 2026 14:32:02 -0800
+Subject: [PATCH] freedreno: count depth and stencil samples once in GMEM
+
+A resource's layout.cpp already includes its sample count. Multiplying it
+by the framebuffer sample count again overestimates depth/stencil storage
+for MSAA. Recover the per-sample size before accounting for the framebuffer
+samples, including multisampled render-to-texture and separate stencil.
+
+Split from Jetha Chan's Mesa 26.2.6 port of the MIT-licensed
+justhalfbit/thinksmart-ubuntu-image GMEM fix. Keep the Lineage-selected
+Mesa version and apply this independently of experimental FP16 changes.
+
+Origin: Jetha Chan's ThinkSmart View port, adapted to Lineage Mesa 26.2.3
+Source: https://github.com/jethac/lenovo-thinksmart-view/blob/1f99f7f09c26074d53064d7bb1fada262cbef10a/streams/audio-dsp/patches/0001-freedreno-gmem-no-fit-sysmem.patch
+Original-commit: 712ef9414fa111d1a7fd2a1134b217b32de09f46
+Base-commit: 400e673cf8ba515d3aace56ed3acc3bb300869a5
+Apply in filename order within this project.
+
+---
+diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/drivers/freedreno/freedreno_gmem.c
+--- a/src/gallium/drivers/freedreno/freedreno_gmem.c
++++ b/src/gallium/drivers/freedreno/freedreno_gmem.c
+@@ -462,9 +462,16 @@ gmem_key_init(struct fd_batch *batch, bool assume_zs, bool no_scis_opt)
+ 
+    if (has_zs || assume_zs) {
+       struct fd_resource *rsc = fd_resource(pfb->zsbuf.texture);
+-      key->zsbuf_cpp[0] = rsc->layout.cpp * pfb->samples;
++      /* layout.cpp already includes the resource's sample count.  What
++       * takes space in GMEM is the framebuffer's sample count (they differ
++       * for multisampled-render-to-texture), so scale the per-sample size.
++       */
++      key->zsbuf_cpp[0] = rsc->layout.cpp / fd_resource_nr_samples(&rsc->b.b) *
++                          pfb->samples;
+       if (rsc->stencil)
+-         key->zsbuf_cpp[1] = rsc->stencil->layout.cpp * pfb->samples;
++         key->zsbuf_cpp[1] = rsc->stencil->layout.cpp /
++                             fd_resource_nr_samples(&rsc->stencil->b.b) *
++                             pfb->samples;
+ 
+       /* If we clear z or s but not both, and we are using z24s8 (ie.
+        * !separate_stencil) then we need to restore the other, even if

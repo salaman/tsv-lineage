@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 4 Nov 2026 14:32:02 -0800
+Subject: [PATCH] freedreno: use sysmem when the smallest GMEM tiles cannot fit
+
+Once bins reach the hardware tile alignment, adding bins cannot reduce
+their storage requirements. Stop the otherwise unbounded layout search,
+cache the no-fit result, and use the existing sysmem renderer for that
+batch. Release the lookup reference under the screen lock as on the
+normal GMEM path, and retain existing nondraw and sysmem decisions.
+
+Split from Jetha Chan's Mesa 26.2.6 port of the MIT-licensed
+justhalfbit/thinksmart-ubuntu-image GMEM fix. No global sysmem override or
+experimental shader/register-allocation changes are needed.
+
+Origin: Jetha Chan's ThinkSmart View port, adapted to Lineage Mesa 26.2.3
+Source: https://github.com/jethac/lenovo-thinksmart-view/blob/1f99f7f09c26074d53064d7bb1fada262cbef10a/streams/audio-dsp/patches/0001-freedreno-gmem-no-fit-sysmem.patch
+Original-commit: 712ef9414fa111d1a7fd2a1134b217b32de09f46
+Base-commit: 400e673cf8ba515d3aace56ed3acc3bb300869a5
+Apply in filename order within this project.
+
+---
+diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.c b/src/gallium/drivers/freedreno/freedreno_gmem.c
+--- a/src/gallium/drivers/freedreno/freedreno_gmem.c
++++ b/src/gallium/drivers/freedreno/freedreno_gmem.c
+@@ -233,6 +233,15 @@ calc_nbins(struct gmem_key *key, struct fd_gmem_stateobj *gmem)
+     * constraints:
+     */
+    while (!layout_gmem(key, nbins_x, nbins_y, gmem)) {
++      /* Once the bins are down to the tile alignment, more bins can't make
++       * them any smaller.  Give up instead of looping forever, and let the
++       * caller render this batch in sysmem.
++       */
++      if (gmem->bin_w <= screen->info->tile_align_w &&
++          gmem->bin_h <= screen->info->tile_align_h) {
++         gmem->no_fit = true;
++         return;
++      }
+       if (nbins_y > nbins_x) {
+          nbins_x++;
+       } else {
+@@ -758,6 +767,19 @@ fd_gmem_render_tiles(struct fd_batch *batch)
+       sysmem = true;
+    }
+ 
++   struct fd_gmem_stateobj *gmem = NULL;
++   if (!batch->nondraw && !sysmem) {
++      gmem = lookup_gmem_state(batch, false, false);
++      if (gmem->no_fit && ctx->emit_sysmem_prep) {
++         DBG("%p: %ux%u does not fit in GMEM, rendering in sysmem", batch,
++             pfb->width, pfb->height);
++         fd_screen_lock(ctx->screen);
++         fd_gmem_reference(&gmem, NULL);
++         fd_screen_unlock(ctx->screen);
++         sysmem = true;
++      }
++   }
++
+    fd_reset_wfi(batch);
+ 
+    ctx->stats.batch_total++;
+@@ -782,7 +804,6 @@ fd_gmem_render_tiles(struct fd_batch *batch)
+       trace_end_render_pass(&batch->trace, batch->gmem);
+       ctx->stats.batch_sysmem++;
+    } else {
+-      struct fd_gmem_stateobj *gmem = lookup_gmem_state(batch, false, false);
+       batch->gmem_state = gmem;
+       trace_render_gmem(&batch->trace, batch->gmem, gmem->nbins_x, gmem->nbins_y,
+                         gmem->bin_w, gmem->bin_h);
+diff --git a/src/gallium/drivers/freedreno/freedreno_gmem.h b/src/gallium/drivers/freedreno/freedreno_gmem.h
+--- a/src/gallium/drivers/freedreno/freedreno_gmem.h
++++ b/src/gallium/drivers/freedreno/freedreno_gmem.h
+@@ -44,6 +44,7 @@ struct fd_gmem_stateobj {
+    uint16_t width, height;
+    uint16_t maxpw, maxph; /* maximum pipe width/height */
+    uint8_t num_vsc_pipes; /* number of pipes for a20x */
++   bool no_fit;           /* even the smallest bins exceed GMEM */
+ 
+    struct fd_vsc_pipe vsc_pipe[32];
+    struct fd_tile *tile;
