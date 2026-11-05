@@ -12,6 +12,7 @@ TARGET_GRAPHICS_ALLOCATOR_HAL := minigbm-upstream
 TARGET_GRAPHICS_COMPOSER_HAL := drm_hwcomposer
 TARGET_AUDIO_HAL := tinyhal
 TARGET_THERMAL_HAL := linaro-libpm
+TARGET_POWER_HAL := perfmgr-lineage
 TARGET_SENSORS_HAL := iio
 TARGET_HAS_BATTERY := false
 TARGET_HEALTH_HAL := none
@@ -42,6 +43,9 @@ PRODUCT_PACKAGES += \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
     init.recovery.thinksmart.rc
+
+# Keep IPowerStats when replacing the APEX that bundled it with example IPower.
+PRODUCT_PACKAGES += android.hardware.power.stats-service.example
 
 PRODUCT_PACKAGES_DEBUG += \
     fsverity \
@@ -76,6 +80,10 @@ PRODUCT_SYSTEM_PROPERTIES += \
 
 PRODUCT_VENDOR_PROPERTIES += \
     ro.vendor.qcom.soc.enable_modem_services=0 \
+    vendor.powerhal.disp.idle_support=0 \
+    vendor.powerhal.interaction.min=1000 \
+    vendor.powerhal.interaction.max=2000 \
+    vendor.powerhal.interaction.offset=0 \
     ro.vendor.v4l2_codec2.decoder.supported.h264=true \
     ro.vendor.v4l2_codec2.decoder.supported.hevc=true \
     ro.vendor.v4l2_codec2.decode_concurrent_instances=1 \

@@ -1,0 +1,75 @@
+{
+  "Nodes": [
+    {
+      "Name": "CPUMinFrequency",
+      "Paths": [
+        "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq"
+      ],
+      "Values": [
+        "1612800",
+        "1228800",
+        "652800"
+      ],
+      "DefaultIndex": 2,
+      "ResetOnInit": true,
+      "Truncate": true,
+      "HoldFd": false,
+      "WriteOnly": true,
+      "AllowFailure": false
+    },
+    {
+      "Name": "GPUMinFrequency",
+      "Paths": [
+        "/sys/class/devfreq/1c00000.gpu/min_freq"
+      ],
+      "Values": [
+        "650000000",
+        "19200000"
+      ],
+      "DefaultIndex": 1,
+      "ResetOnInit": true,
+      "Truncate": true,
+      "HoldFd": false,
+      "WriteOnly": true,
+      "AllowFailure": false
+    }
+  ],
+  "Actions": [
+    {
+      "PowerHint": "INTERACTION",
+      "Node": "CPUMinFrequency",
+      "Duration": 1000,
+      "Value": "1228800"
+    },
+    {
+      "PowerHint": "INTERACTION",
+      "Node": "GPUMinFrequency",
+      "Duration": 1000,
+      "Value": "650000000"
+    },
+    {
+      "PowerHint": "LAUNCH",
+      "Node": "CPUMinFrequency",
+      "Duration": 2000,
+      "Value": "1612800"
+    },
+    {
+      "PowerHint": "LAUNCH",
+      "Node": "GPUMinFrequency",
+      "Duration": 2000,
+      "Value": "650000000"
+    },
+    {
+      "PowerHint": "DISPLAY_UPDATE_IMMINENT",
+      "Node": "CPUMinFrequency",
+      "Duration": 100,
+      "Value": "1228800"
+    },
+    {
+      "PowerHint": "DISPLAY_UPDATE_IMMINENT",
+      "Node": "GPUMinFrequency",
+      "Duration": 100,
+      "Value": "650000000"
+    }
+  ]
+}

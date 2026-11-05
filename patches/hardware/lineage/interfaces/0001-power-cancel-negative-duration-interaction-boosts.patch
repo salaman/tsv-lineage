@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Thu, 5 Nov 2026 04:10:58 +0000
+Subject: [PATCH] power: cancel negative-duration interaction boosts
+
+IPower.setBoost specifies that a negative duration cancels the previous
+boost. InteractionHandler currently clamps it to the minimum duration,
+starting or extending a boost instead.
+
+Handle cancellation under the existing state lock. Abort an outstanding
+display-idle wait, return an initialized handler to idle, and release the
+INTERACTION vote. Keep the uninitialized timed-fallback state unchanged.
+Other hints retain their own votes through libperfmgr.
+
+Base: 13281f8a0d718205781245f27ded74bc5ff03388
+Source: https://github.com/LineageOS/android_hardware_lineage_interfaces/blob/13281f8a0d718205781245f27ded74bc5ff03388/power-libperfmgr/aidl/InteractionHandler.cpp
+Contract: hardware/interfaces/power/aidl/android/hardware/power/IPower.aidl
+Signed-off-by: Chris Paslawski <chris@paslawski.me>
+---
+ power-libperfmgr/aidl/InteractionHandler.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/power-libperfmgr/aidl/InteractionHandler.cpp b/power-libperfmgr/aidl/InteractionHandler.cpp
+--- a/power-libperfmgr/aidl/InteractionHandler.cpp
++++ b/power-libperfmgr/aidl/InteractionHandler.cpp
+@@ -151,6 +151,17 @@ void InteractionHandler::Acquire(int32_t duration) {
+ 
+     std::lock_guard<std::mutex> lk(mLock);
+ 
++    if (duration < 0) {
++        if (mState == INTERACTION_STATE_WAITING) {
++            AbortWaitLocked();
++        }
++        if (mState != INTERACTION_STATE_UNINITIALIZED) {
++            mState = INTERACTION_STATE_IDLE;
++        }
++        PerfRel();
++        return;
++    }
++
+     int inputDuration = duration + kDurationOffsetMs;
+     int finalDuration;
+     if (inputDuration > kMaxDurationMs)
+-- 
+2.43.0

@@ -22,3 +22,9 @@ prebuilt_etc {
     sub_dir: "init",
     recovery: true,
 }
+
+prebuilt_etc {
+    name: "powerhint.json",
+    src: "config/powerhint.json",
+    vendor: true,
+}

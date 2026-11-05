@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Thu, 5 Nov 2026 04:43:00 +0000
+Subject: [PATCH] power: only report implemented low-power support
+
+SupportManager unconditionally advertises LOW_POWER, even when the device
+has neither a LOW_POWER hint nor an ADPF profile. The generic setMode path
+then has no implementation for that mode.
+
+Use the existing hint/profile checks for LOW_POWER, like other modes.
+Device-specific implementations can still report support through the
+existing override checked first by Power::isModeSupported.
+
+Base: 13281f8a0d718205781245f27ded74bc5ff03388
+Source: https://github.com/LineageOS/android_hardware_lineage_interfaces/blob/13281f8a0d718205781245f27ded74bc5ff03388/power-libperfmgr/aidl/SupportManager.cpp
+Signed-off-by: Chris Paslawski <chris@paslawski.me>
+---
+ power-libperfmgr/aidl/SupportManager.cpp | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/power-libperfmgr/aidl/SupportManager.cpp b/power-libperfmgr/aidl/SupportManager.cpp
+--- a/power-libperfmgr/aidl/SupportManager.cpp
++++ b/power-libperfmgr/aidl/SupportManager.cpp
+@@ -174,10 +174,6 @@ bool SupportManager::modeSupported(Mode type) {
+         return false;
+     }
+     bool supported = HintManager::GetInstance()->IsHintSupported(toString(type));
+-    // LOW_POWER handled insides PowerHAL specifically
+-    if (type == Mode::LOW_POWER) {
+-        return true;
+-    }
+     if (!supported && HintManager::GetInstance()->IsAdpfProfileSupported(toString(type))) {
+         return true;
+     }
+-- 
+2.43.0

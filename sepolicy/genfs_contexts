@@ -1,5 +1,6 @@
 genfscon sysfs /devices/platform/i2c-sensors/i2c-0/0-0018 u:object_r:vendor_sysfs_iio:s0
 genfscon sysfs /devices/platform/i2c-sensors/i2c-0/0-0051 u:object_r:vendor_sysfs_iio:s0
+genfscon sysfs /devices/platform/soc@0/1c00000.gpu/devfreq/1c00000.gpu/min_freq u:object_r:sysfs_gpu:s0
 genfscon sysfs /devices/platform/soc@0/1a00000.display-subsystem/1a01000.display-controller/uevent u:object_r:sysfs_gpu:s0
 genfscon sysfs /devices/platform/soc@0/200f000.spmi/spmi-0/0-03/200f000.spmi:pmic@3:leds@d800/backlight u:object_r:vendor_sysfs_backlight:s0
 genfscon sysfs /devices/platform/soc@0/200f000.spmi/spmi-0/0-03/200f000.spmi:pmic@3:leds@d800/backlight/backlight/bl_power u:object_r:vendor_thinksmart_sysfs_backlight_control:s0
