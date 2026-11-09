@@ -1,2 +1,8 @@
+service watchdogd /system/bin/watchdogd 10 20
+    user root
+    group root
+    seclabel u:r:watchdogd:s0
+    shutdown critical
+
 on early-init
     setprop sys.usb.configfs 1

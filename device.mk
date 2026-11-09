@@ -42,7 +42,9 @@ PRODUCT_PACKAGES += \
     fstab.thinksmart \
     fstab.thinksmart.ramdisk \
     init.thinksmart.rc \
-    init.recovery.thinksmart.rc
+    init.recovery.thinksmart.rc \
+    watchdogd \
+    watchdogd.recovery
 
 # Keep IPowerStats when replacing the APEX that bundled it with example IPower.
 PRODUCT_PACKAGES += android.hardware.power.stats-service.example

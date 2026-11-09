@@ -17,6 +17,14 @@ Track firmware output ownership and readonly references so synthetic LAST
 and same-FD restart cannot steal or duplicate firmware-owned buffers.
 Cancel work during teardown and reset ownership after confirmed flushes.
 
+Also accept a successful, empty EOS for the client-visible output whose
+tag no longer identifies a queued capture buffer, even when its address
+is nonzero. Keep the addressless interception before tag lookup to avoid
+mistaking dummy tag zero for a real buffer. Reuse the same deferred,
+one-shot completion path; do not flush or steal firmware-owned buffers.
+Error, corrupt, dropped, nonempty and internal-DPB returns do not enter
+the additional fallback.
+
 Enable both compatibility quirks only on lenovo,cd-18781y with
 qcom,msm8953-venus. Other boards retain their existing parsing and EOF
 paths, with additional bounds validation for variable arrays.
@@ -28,11 +36,19 @@ its field offsets and accumulate the actual bytes consumed.
 
 This compatibility behavior was exercised on the earlier 7.1 kernel,
 including exact-pixel H.264/HEVC decoding, deferred EOF, command restart,
-STREAMOFF pool reuse and drain cancellation. The 7.3 rebase needs renewed
-device qualification; this is not a firmware-version-independent policy.
+STREAMOFF pool reuse and drain cancellation. On Linux 7.3, H.264 High with
+B-frames and HEVC with and without B-frames retained exact software-decoded
+pixels through drain, command restart and STREAMOFF pool reuse. Those runs
+do not establish that the additional nonzero-address missing-tag fallback
+was exercised, or renew the earlier drain-cancellation qualification.
+This is not a firmware-version-independent policy.
 
 Origin: Local ThinkSmart View port
 Source: https://github.com/msm8953-mainline/linux
+Reference: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/kernel/patches/0703-media-venus-vdec-deliver-an-EOS-the-firmware-signals-on-a-returned-buffer.patch
+Adaptation: Chris Paslawski <chris@paslawski.me>; extend the existing EOS
+  mechanism for missing-tag completions, without importing the reference's
+  asynchronous output-flush implementation or any encoder changes.
 Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 Apply in filename order within this project.
 
@@ -521,10 +537,10 @@ index 5751d0140700cba3e11af36c9e5f572f70c728ca..8608f87325465b2aab3ec4dcab4144ce
  #define WHICH_CAP_MIN	0
  #define WHICH_CAP_MAX	1
 diff --git a/drivers/media/platform/qcom/venus/vdec.c b/drivers/media/platform/qcom/venus/vdec.c
-index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29fe4c7cfa 100644
+index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..da3b4b4beb2cf5185847b35ded1fc83728d9105c 100644
 --- a/drivers/media/platform/qcom/venus/vdec.c
 +++ b/drivers/media/platform/qcom/venus/vdec.c
-@@ -544,6 +544,80 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
+@@ -544,6 +544,94 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
  	}
  }
  
@@ -545,6 +561,20 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
 +	inst->eos_work_enabled = false;
 +	spin_unlock_irqrestore(&inst->eos_lock, flags);
 +	cancel_work_sync(&inst->eos_work);
++}
++
++static void vdec_queue_eos(struct venus_inst *inst)
++{
++	unsigned long flags;
++
++	/* IRQ processing must remain able to complete a concurrent flush. */
++	spin_lock_irqsave(&inst->eos_lock, flags);
++	if (inst->eos_work_enabled) {
++		inst->eos_work_enabled = false;
++		WRITE_ONCE(inst->eos_received, true);
++		schedule_work(&inst->eos_work);
++	}
++	spin_unlock_irqrestore(&inst->eos_lock, flags);
 +}
 +
 +static void vdec_complete_eos(struct venus_inst *inst,
@@ -605,7 +635,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  static int
  vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
  {
-@@ -592,7 +666,15 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
+@@ -592,7 +680,15 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
  					 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
  		vb2_clear_last_buffer_dequeued(dst_vq);
  
@@ -621,7 +651,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  	}
  
  unlock:
-@@ -1052,6 +1134,7 @@ static int vdec_start_capture(struct venus_inst *inst)
+@@ -1052,6 +1148,7 @@ static int vdec_start_capture(struct venus_inst *inst)
  		venus_helper_queue_dpb_bufs(inst);
  		venus_helper_process_initial_cap_bufs(inst);
  		inst->streamon_cap = 1;
@@ -629,7 +659,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  		return 0;
  	}
  
-@@ -1101,6 +1184,9 @@ reconfigure:
+@@ -1101,6 +1198,9 @@ reconfigure:
  	inst->sequence_cap = 0;
  	inst->reconfig = false;
  	inst->drain_active = false;
@@ -639,7 +669,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  
  	return 0;
  
-@@ -1230,13 +1316,39 @@ static void vdec_cancel_dst_buffers(struct venus_inst *inst)
+@@ -1230,13 +1330,39 @@ static void vdec_cancel_dst_buffers(struct venus_inst *inst)
  		v4l2_m2m_buf_done(buf, VB2_BUF_STATE_ERROR);
  }
  
@@ -679,7 +709,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  		fallthrough;
  	case VENUS_DEC_STATE_DRAIN:
  		inst->codec_state = VENUS_DEC_STATE_STOPPED;
-@@ -1247,6 +1359,8 @@ static int vdec_stop_capture(struct venus_inst *inst)
+@@ -1247,6 +1373,8 @@ static int vdec_stop_capture(struct venus_inst *inst)
  		break;
  	case VENUS_DEC_STATE_DRC:
  		ret = hfi_session_flush(inst, HFI_FLUSH_OUTPUT, true);
@@ -688,7 +718,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  		inst->codec_state = VENUS_DEC_STATE_CAPTURE_SETUP;
  		venus_helper_free_dpb_bufs(inst);
  		break;
-@@ -1267,11 +1381,15 @@ static int vdec_stop_output(struct venus_inst *inst)
+@@ -1267,11 +1395,15 @@ static int vdec_stop_output(struct venus_inst *inst)
  	case VENUS_DEC_STATE_STOPPED:
  	case VENUS_DEC_STATE_DRC:
  		ret = hfi_session_flush(inst, HFI_FLUSH_ALL, true);
@@ -704,7 +734,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  		break;
  	default:
  		break;
-@@ -1285,9 +1403,12 @@ static void vdec_stop_streaming(struct vb2_queue *q)
+@@ -1285,9 +1417,12 @@ static void vdec_stop_streaming(struct vb2_queue *q)
  	struct venus_inst *inst = vb2_get_drv_priv(q);
  	int ret = -EINVAL;
  
@@ -717,7 +747,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  
  	if (q->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
  		ret = vdec_stop_capture(inst);
-@@ -1315,6 +1436,7 @@ static void vdec_session_release(struct venus_inst *inst)
+@@ -1315,6 +1450,7 @@ static void vdec_session_release(struct venus_inst *inst)
  	struct venus_core *core = inst->core;
  	int ret, abort = 0;
  
@@ -725,7 +755,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  	vdec_pm_get(inst);
  
  	mutex_lock(&inst->lock);
-@@ -1362,9 +1484,12 @@ static void vdec_buf_cleanup(struct vb2_buffer *vb)
+@@ -1362,9 +1498,12 @@ static void vdec_buf_cleanup(struct vb2_buffer *vb)
  	struct venus_buffer *buf = to_venus_buffer(vbuf);
  
  	mutex_lock(&inst->lock);
@@ -739,7 +769,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  	mutex_unlock(&inst->lock);
  
  	inst->buf_count--;
-@@ -1382,6 +1507,13 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
+@@ -1382,6 +1521,13 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
  
  	mutex_lock(&inst->lock);
  
@@ -753,7 +783,20 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  	if (inst->next_buf_last && V4L2_TYPE_IS_CAPTURE(vb->vb2_queue->type) &&
  	    inst->codec_state == VENUS_DEC_STATE_DRC) {
  		vbuf->flags |= V4L2_BUF_FLAG_LAST;
-@@ -1436,6 +1568,7 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
+@@ -1428,6 +1574,12 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
+ 	vbuf = venus_helper_find_buf(inst, type, tag);
+ 	if (!vbuf) {
+ 		venus_helper_change_dpb_owner(inst, vbuf, type, buf_type, tag);
++		if ((inst->core->quirks & VENUS_QUIRK_BUFFERLESS_EOS) &&
++		    buf_type == inst->opb_buftype && !bytesused &&
++		    (flags & V4L2_BUF_FLAG_LAST) && inst->error == HFI_ERR_NONE &&
++		    !(hfi_flags & (HFI_BUFFERFLAG_DATACORRUPT |
++				   HFI_BUFFERFLAG_DROP_FRAME)))
++			vdec_queue_eos(inst);
+ 		return;
+ 	}
+ 
+@@ -1436,6 +1588,7 @@ static void vdec_buf_done(struct venus_inst *inst, unsigned int buf_type,
  	vb = &vbuf->vb2_buf;
  
  	if (type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
@@ -761,29 +804,17 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  		vb2_set_plane_payload(vb, 0, bytesused);
  		vb->planes[0].data_offset = data_offset;
  		vb->timestamp = timestamp_us * NSEC_PER_USEC;
-@@ -1574,10 +1707,21 @@ static void vdec_event_notify(struct venus_inst *inst, u32 event,
- {
- 	struct venus_core *core = inst->core;
- 	struct device *dev = core->dev_dec;
-+	unsigned long flags;
- 
+@@ -1578,6 +1731,9 @@ static void vdec_event_notify(struct venus_inst *inst, u32 event,
  	vdec_pm_touch(inst);
  
  	switch (event) {
 +	case EVT_SESSION_EOS:
-+		/* IRQ processing must remain able to complete a concurrent flush. */
-+		spin_lock_irqsave(&inst->eos_lock, flags);
-+		if (inst->eos_work_enabled) {
-+			inst->eos_work_enabled = false;
-+			WRITE_ONCE(inst->eos_received, true);
-+			schedule_work(&inst->eos_work);
-+		}
-+		spin_unlock_irqrestore(&inst->eos_lock, flags);
++		vdec_queue_eos(inst);
 +		break;
  	case EVT_SESSION_ERROR:
  		inst->session_error = true;
  		venus_helper_vb2_queue_error(inst);
-@@ -1694,6 +1838,8 @@ static int vdec_open(struct file *file)
+@@ -1694,6 +1850,8 @@ static int vdec_open(struct file *file)
  	INIT_LIST_HEAD(&inst->list);
  	mutex_init(&inst->lock);
  	mutex_init(&inst->ctx_q_lock);
@@ -792,7 +823,7 @@ index 3c29bb9162308e089ae526b662aa1f6ffb49fd2b..e6216573716fb30db6042624cc698d29
  
  	inst->core = core;
  	inst->session_type = VIDC_SESSION_TYPE_DEC;
-@@ -1761,6 +1907,7 @@ static int vdec_close(struct file *file)
+@@ -1761,6 +1919,7 @@ static int vdec_close(struct file *file)
  	struct venus_inst *inst = to_inst(file);
  
  	vdec_pm_get(inst);

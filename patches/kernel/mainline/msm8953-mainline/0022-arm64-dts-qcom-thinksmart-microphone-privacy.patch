@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Sat, 7 Nov 2026 20:24:09 -0800
+Subject: [PATCH] arm64: dts: qcom: thinksmart: report hardware microphone mute
+
+Android consumes SW_MUTE_DEVICE to update audio mute and physical
+microphone sensor privacy. SW_MICROPHONE_INSERT describes a connected
+microphone instead and does not activate this integration.
+
+GPIO86 is high with the slider in its upper, muted position and low with
+the microphones live. Use active-high polarity so switch state one means
+muted. The slider already silences both microphone channels in hardware.
+Remove the obsolete comment claiming that this switch cannot be modelled.
+
+Origin: Local ThinkSmart View Android integration
+Source: https://github.com/msm8953-mainline/linux
+Reference: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/devices/privacy-switches/ANALYSIS.md
+Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
+Apply in filename order within this project.
+
+---
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -58,16 +58,11 @@
+ 			linux,input-type = <EV_SW>;
+ 		};
+ 
+-		/*
+-		 * There currently isn't a good way to model a binary microphone mute
+-		 * switch. It is a hardware mute switch though, so mics will be muted
+-		 * even though it is not reflected in UI.
+-		 */
+ 		mic-mute-swtich {
+ 			label = "Mic Mute";
+-			gpios = <&tlmm 86 GPIO_ACTIVE_LOW>;
++			gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;
+ 			linux,input-type = <EV_SW>;
+-			linux,code = <SW_MICROPHONE_INSERT>;
++			linux,code = <SW_MUTE_DEVICE>;
+ 		};
+ 
+ 		volume-up-key {

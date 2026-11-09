@@ -1,5 +1,13 @@
 import /vendor/etc/init/hw/init.mainline.qcom.rc
 
+# Feed every 10 seconds; the second argument is a 20-second timeout margin.
+service watchdogd /system/bin/watchdogd 10 20
+    class core
+    user root
+    group root
+    seclabel u:r:watchdogd:s0
+    shutdown critical
+
 on early-init
     exec_start vendor.timekeep-initialize
 
