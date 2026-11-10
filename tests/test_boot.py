@@ -35,6 +35,57 @@ class BootTest(unittest.TestCase):
             stream.truncate(boot.PARTITION_BYTES)
         self.output = self.root / "physical-boot.img"
 
+    def fresh_loader(self):
+        header = self.backup.read_bytes()[:2048]
+        path = self.root / "lk2nd.img"
+        path.write_bytes(header + bytes(4096) + b"signature" + b"SEANDROIDENFORCE")
+        return path
+
+    def test_fresh_loader_is_padded_and_combined_with_payload(self):
+        loader = self.fresh_loader()
+        boot.prepare(loader, self.payload, self.dtb, self.output, fresh_lk2nd=True)
+        self.assertEqual(self.output.stat().st_size, boot.PARTITION_BYTES)
+        with self.output.open("rb") as stream:
+            self.assertEqual(stream.read(loader.stat().st_size), loader.read_bytes())
+            self.assertEqual(stream.read(boot.PREFIX_BYTES - loader.stat().st_size),
+                             bytes(boot.PREFIX_BYTES - loader.stat().st_size))
+            self.assertEqual(stream.read(self.payload.stat().st_size), self.payload.read_bytes())
+
+    def test_fresh_loader_without_trailer_is_rejected(self):
+        loader = self.fresh_loader()
+        loader.write_bytes(loader.read_bytes()[:-len(b"SEANDROIDENFORCE")])
+        with self.assertRaisesRegex(ValueError, "trailer"):
+            boot.prepare(loader, self.payload, self.dtb, self.output, fresh_lk2nd=True)
+        self.assertFalse(self.output.exists())
+
+    def test_fresh_loader_cannot_exceed_prefix(self):
+        loader = self.fresh_loader()
+        with loader.open("r+b") as stream:
+            stream.truncate(boot.PREFIX_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "512 KiB"):
+            boot.prepare(loader, self.payload, self.dtb, self.output, fresh_lk2nd=True)
+
+    def test_fresh_loader_with_embedded_qcdt_is_rejected(self):
+        loader = self.fresh_loader()
+        data = bytearray(loader.read_bytes())
+        struct.pack_into("<I", data, 40, 1)
+        loader.write_bytes(data)
+        with self.assertRaisesRegex(ValueError, "QCDT"):
+            boot.prepare(loader, self.payload, self.dtb, self.output, fresh_lk2nd=True)
+
+    def test_fresh_loader_cannot_omit_signature(self):
+        loader = self.fresh_loader()
+        loader.write_bytes(loader.read_bytes()[:6144] + b"SEANDROIDENFORCE")
+        with self.assertRaisesRegex(ValueError, "signature"):
+            boot.prepare(loader, self.payload, self.dtb, self.output, fresh_lk2nd=True)
+
+    def test_fresh_loader_does_not_replace_existing_output(self):
+        self.output.write_bytes(b"personal backup")
+        with self.assertRaisesRegex(ValueError, "exists"):
+            boot.prepare(self.fresh_loader(), self.payload, self.dtb, self.output,
+                         fresh_lk2nd=True)
+        self.assertEqual(self.output.read_bytes(), b"personal backup")
+
     def test_preserves_device_prefix_and_payload(self):
         digest = boot.prepare(self.backup, self.payload, self.dtb, self.output)
         self.assertEqual(len(digest), 64)
@@ -58,7 +109,7 @@ class BootTest(unittest.TestCase):
     def test_non_lk2nd_backup_is_rejected(self):
         with self.backup.open("r+b") as stream:
             stream.write(b"not lk2nd")
-        with self.assertRaisesRegex(ValueError, "recognized installed"):
+        with self.assertRaisesRegex(ValueError, "recognized lk2nd"):
             boot.prepare(self.backup, self.payload, self.dtb, self.output)
 
     def test_backup_requires_full_physical_partition(self):
