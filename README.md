@@ -77,6 +77,9 @@ local adaptation notes; preserve upstream authors and signoffs when rebasing.
 | Xiaomi kernel configuration | [android_device_xiaomi_mi89xx-mainline](https://github.com/LineageOS/android_device_xiaomi_mi89xx-mainline); pinned by the Git submodule; upstream notices apply |
 | ath10k firmware encoder | Origin and ISC license in [tools/README.md](tools/README.md) and the script's original notice |
 
-Source-tree licenses and notices apply to modifications; this port does not
-relicense third-party material. GPL text is in [LICENSES/GPL-2.0.txt](LICENSES/GPL-2.0.txt).
-Choose a license for newly authored integration files before public distribution.
+Unless otherwise noted, independently authored integration code, support scripts
+and documentation are licensed under the [Apache License, Version 2.0](LICENSE).
+Third-party code and derived modifications, including patch contents, retain
+their applicable upstream licenses and notices. GPL text is in
+[LICENSES/GPL-2.0.txt](LICENSES/GPL-2.0.txt). This license does not grant rights
+to redistribute proprietary firmware.
