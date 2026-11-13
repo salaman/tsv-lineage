@@ -6,3 +6,4 @@ typealias vendor_thinksmart_persist_file alias persist_file;
 
 type vendor_thinksmart_sysfs_backlight_control, fs_type, sysfs_type;
 type vendor_thinksmart_sysfs_discard_max_bytes, fs_type, sysfs_type;
+type vendor_thinksmart_sysfs_camera, fs_type, sysfs_type;

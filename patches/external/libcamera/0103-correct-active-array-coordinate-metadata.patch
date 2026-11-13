@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] android: report the active array in the correct coordinates
+
+V4L2 selection rectangles use native sensor coordinates, whereas libcamera's
+PixelArrayActiveAreas property is relative to the readable PixelArraySize.
+Preserve the CROP_BOUNDS origin and subtract it when publishing the property.
+Leave the native activeArea_ unchanged for internal analogue-crop calculations.
+
+The sensor's readable array starts at native (8, 8). Publishing that
+native offset makes its 2608x1960 active area extend beyond the reported
+2608x1960 readable array, so the Android camera app clips the image width
+to 2600 pixels.
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+
+ src/libcamera/sensor/camera_sensor_legacy.cpp |    5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/libcamera/sensor/camera_sensor_legacy.cpp b/src/libcamera/sensor/camera_sensor_legacy.cpp
+--- a/src/libcamera/sensor/camera_sensor_legacy.cpp
++++ b/src/libcamera/sensor/camera_sensor_legacy.cpp
+@@ -130,6 +130,7 @@
+ 	controls::draft::TestPatternModeEnum testPatternMode_;
+ 
+ 	Size pixelArraySize_;
++	Point pixelArrayOrigin_;
+ 	Rectangle activeArea_;
+ 	const BayerFormat *bayerFormat_;
+ 	bool supportFlips_;
+@@ -403,6 +404,7 @@
+ 			<< pixelArraySize_;
+ 		err = -EINVAL;
+ 	} else {
+ 		pixelArraySize_ = rect.size();
++		pixelArrayOrigin_ = rect.topLeft();
+ 	}
+ 
+@@ -621,7 +623,8 @@
+ 
+ 	properties_.set(properties::PixelArraySize, pixelArraySize_);
+-	properties_.set(properties::PixelArrayActiveAreas, { activeArea_ });
++	properties_.set(properties::PixelArrayActiveAreas,
++			{ activeArea_.translatedBy(-pixelArrayOrigin_) });
+ 
+ 	/* Color filter array pattern, register only for RAW sensors. */
+ 	if (bayerFormat_) {
+ 		int32_t cfa;

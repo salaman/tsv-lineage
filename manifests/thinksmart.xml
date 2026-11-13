@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
+  <remote name="ti" fetch="https://git.ti.com/git/" />
   <project name="LineageOS/android_device_mainline_common" path="device/mainline/common" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_device_mainline_qcom-common" path="device/mainline/qcom-common" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_hardware_mainline_common" path="hardware/mainline/common" remote="github" revision="lineage-24.0" />
@@ -15,6 +16,8 @@
   <project name="LineageOS/android_prebuilts_mesa-build-dep" path="prebuilts/mesa-build-dep" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_linux-firmware-mainline" path="external/linux-firmware-mainline" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_external_tinyhal" path="external/tinyhal" remote="github" revision="lineage-24.0" />
+  <remove-project name="platform/external/libcamera" />
+  <project name="android/external-libcamera" path="external/libcamera" remote="ti" revision="3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf" upstream="refs/heads/d-android17-release" clone-depth="1" />
   <project name="LineageOS/android_hardware_sony_timekeep" path="hardware/sony/timekeep" remote="github" revision="lineage-24.0" />
   <project name="LineageOS/android_hardware_linaro_libpm" path="hardware/linaro/libpm" remote="github" revision="d062161c81d3d2b61b27425c2e39c728eab7f9f0" upstream="refs/heads/lineage-24.0" clone-depth="1" />
   <project name="LineageOS/android_hardware_intel_sensors-iio" path="hardware/intel/sensors-iio" remote="github" revision="b5134567f8b8bce819b3686d045acfc120e0159f" upstream="refs/heads/lineage-24.0" clone-depth="1" />

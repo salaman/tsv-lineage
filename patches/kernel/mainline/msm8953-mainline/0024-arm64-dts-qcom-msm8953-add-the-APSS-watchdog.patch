@@ -1,15 +1,11 @@
 From 2a16bc25280ce0bd7d211266c9207b712855d5af Mon Sep 17 00:00:00 2001
 From: Jetha Chan <jethachan@gmail.com>
 Date: Wed, 4 Nov 2026 18:03:36 +0900
-Subject: [PATCH] arm64: dts: qcom: msm8953: add the APSS watchdog
+Subject: [PATCH 206/206] arm64: dts: qcom: msm8953: add the APSS watchdog
 
 Describe the APSS watchdog (bark on SPI 3, bite on SPI 4, clocked from the
 32 kHz sleep clock) so a wedged kernel resets the SoC instead of needing a
 power cycle. The address and interrupts follow the vendor msm8953 tree.
-
-Origin: Unmodified upstream patch; numbered for the ThinkSmart Android queue
-Source: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/kernel/patches/0206-arm64-dts-qcom-msm8953-add-the-APSS-watchdog.patch
-Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
 ---
  arch/arm64/boot/dts/qcom/msm8953.dtsi | 8 ++++++++
  1 file changed, 8 insertions(+)
@@ -35,3 +31,4 @@ index a71900116..f0d011619 100644
  
 -- 
 2.56.0
+

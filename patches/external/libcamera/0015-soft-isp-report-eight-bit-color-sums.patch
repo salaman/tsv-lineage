@@ -1,0 +1,104 @@
+From 614181c6f35dcf29d6735d795be79e14f34ec07c Mon Sep 17 00:00:00 2001
+From: Alessandro Fontana <alessandro.fontana@pm.me>
+Date: Sun, 1 Nov 2026 20:55:26 +0100
+Subject: [PATCH] libcamera: software_isp: Report colour sums in 8-bit units
+
+The statistics of unpacked 10 and 12 bit Bayer formats sum the raw
+sample values, while the black level and the histogram the IPA works
+with are in 8-bit units. The AWB subtracted a quarter of the real black
+level from 10-bit sums: on the S5K4H5YC, black at 64 out of 1023, a dim
+indoor scene that needs a blue gain of 2.29 got 1.50, and the picture
+kept a colour cast that grew as the light fell.
+
+Shift the sums down to 8 bits per sample at the end of the frame, as
+the packed formats already sample them, the same way current upstream
+libcamera does.
+
+Assisted-by: LLM
+Signed-off-by: Alessandro Fontana <alessandro.fontana@pm.me>
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/614181c6f35dcf29d6735d795be79e14f34ec07c
+
+ .../libcamera/internal/software_isp/swisp_stats.h  |    6 +++---
+ src/libcamera/software_isp/swstats_cpu.cpp         |   10 ++++++++++
+ src/libcamera/software_isp/swstats_cpu.h           |    2 ++
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index ae11f11..939ed6b 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -21,15 +21,15 @@ namespace libcamera {
+  */
+ struct SwIspStats {
+ 	/**
+-	 * \brief Holds the sum of all sampled red pixels
++	 * \brief Holds the sum of all sampled red pixels, in 8-bit units
+ 	 */
+ 	uint64_t sumR_;
+ 	/**
+-	 * \brief Holds the sum of all sampled green pixels
++	 * \brief Holds the sum of all sampled green pixels, in 8-bit units
+ 	 */
+ 	uint64_t sumG_;
+ 	/**
+-	 * \brief Holds the sum of all sampled blue pixels
++	 * \brief Holds the sum of all sampled blue pixels, in 8-bit units
+ 	 */
+ 	uint64_t sumB_;
+ 	/**
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 4b77b36..b090d4b 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -318,6 +318,11 @@ void SwStatsCpu::startFrame(void)
+  */
+ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ {
++	/* Report the sums in the 8-bit scale of the histogram and black level */
++	stats_.sumR_ >>= sumShift_;
++	stats_.sumG_ >>= sumShift_;
++	stats_.sumB_ >>= sumShift_;
++
+ 	*sharedStats_ = stats_;
+ 	statsReady.emit(frame, bufferId);
+ }
+@@ -374,12 +379,15 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg)
+ 		switch (bayerFormat.bitDepth) {
+ 		case 8:
+ 			stats0_ = &SwStatsCpu::statsBGGR8Line0;
++			sumShift_ = 0;
+ 			return 0;
+ 		case 10:
+ 			stats0_ = &SwStatsCpu::statsBGGR10Line0;
++			sumShift_ = 2;
+ 			return 0;
+ 		case 12:
+ 			stats0_ = &SwStatsCpu::statsBGGR12Line0;
++			sumShift_ = 4;
+ 			return 0;
+ 		}
+ 	}
+@@ -391,6 +399,8 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg)
+ 		/* Skip every 3th and 4th line, sample every other 2x2 block */
+ 		ySkipMask_ = 0x02;
+ 		xShift_ = 0;
++		/* The packed line functions sample the 8 most significant bits */
++		sumShift_ = 0;
+ 
+ 		switch (bayerFormat.order) {
+ 		case BayerFormat::BGGR:
+diff --git a/src/libcamera/software_isp/swstats_cpu.h b/src/libcamera/software_isp/swstats_cpu.h
+index 26a2f46..7779914 100644
+--- a/src/libcamera/software_isp/swstats_cpu.h
++++ b/src/libcamera/software_isp/swstats_cpu.h
+@@ -89,6 +89,8 @@ private:
+ 	Size patternSize_;
+ 
+ 	unsigned int xShift_;
++	/* Right shift bringing the colour sums to 8 bits per sample */
++	unsigned int sumShift_;
+ 
+ 	SharedMemObject<SwIspStats> sharedStats_;
+ 	SwIspStats stats_;

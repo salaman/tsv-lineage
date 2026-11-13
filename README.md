@@ -22,7 +22,7 @@ Boots to the Android UI with root ADB.
 | RTC | Working |
 | Internal storage | Working |
 | Hardware AVC/H.264 and HEVC/H.265 decoding | Working |
-| Camera | Not working |
+| Camera | Working (S5KC505A) |
 | Full system suspend | Not working |
 
 OTA installation is not supported. This is an experimental userdebug build
@@ -36,7 +36,7 @@ with enforcing SELinux and verified boot disabled. The inherited userdebug
 | Device build definitions | Root `*.mk` and `Android.bp` |
 | Runtime configuration and firmware lists | `config/` |
 | Batteryless health HAL and device tests | `health/` |
-| Platform / mainline sources | LineageOS `lineage-24.0` plus [20-project local manifest](manifests/thinksmart.xml) |
+| Platform / mainline sources | LineageOS `lineage-24.0` plus [local manifest](manifests/thinksmart.xml) |
 | Community kernel configuration | `upstream/xiaomi-mainline` Git submodule |
 | Maintained codec sources | `drivers/tas5782m`; copied with attribution and local fixes |
 | Changes to upstream projects | `patches/<Android project path>/0001-description.patch` |

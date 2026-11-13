@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] android: Pass on the AE target FPS range
+
+Translate ANDROID_CONTROL_AE_TARGET_FPS_RANGE to FrameDurationLimits
+when the camera offers the control, so that a request for a fixed frame
+rate is honoured by the exposure control.
+
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/d7d2d833add63b75983aa0d657fb269a315f90c9
+
+ src/android/camera_device.cpp |    7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+index d6f12c1..43f65c6 100644
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -916,6 +916,13 @@ int CameraDevice::processControls(Camera3RequestDescriptor *descriptor)
+ 		}
+ 	}
+ 
++	if (camera_->controls().find(controls::FrameDurationLimits.id()) != camera_->controls().end() &&
++	    settings.getEntry(ANDROID_CONTROL_AE_TARGET_FPS_RANGE, &entry) &&
++	    entry.count == 2 && entry.data.i32[0] > 0 && entry.data.i32[1] > 0) {
++		const int64_t limits[] = { 1000000 / entry.data.i32[1], 1000000 / entry.data.i32[0] };
++		controls.set(controls::FrameDurationLimits, Span<const int64_t, 2>(limits));
++	}
++
+ 	if (settings.getEntry(ANDROID_STATISTICS_FACE_DETECT_MODE, &entry)) {
+ 		/* Only set the control if the camera supports it */
+ 		auto iter = camera_->controls().find(controls::draft::FaceDetectMode.id());

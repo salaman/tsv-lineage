@@ -1,0 +1,325 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] libcamera: software_isp: Estimate the light from grey samples
+
+The white balance followed every coloured area of the scene: a green
+cloth turned a white wall blue. The statistics now also sum, apart, the
+samples whose colour lies near the white line of the sensor, neither too
+dark nor near saturation. With the new greyDistance tuning key the white
+balance uses them when they are at least 1% of the samples.
+
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/95f6b20d917be23759710c1f85a6f2deab106e0a
+
+ .../internal/software_isp/debayer_params.h         |   10 ++
+ .../libcamera/internal/software_isp/swisp_stats.h  |   11 +++
+ src/ipa/simple/algorithms/awb.cpp                  |   34 +++++++-
+ src/ipa/simple/algorithms/awb.h                    |    2 
+ src/libcamera/software_isp/debayer_cpu.cpp         |    1 
+ src/libcamera/software_isp/swstats_cpu.cpp         |   84 +++++++++++++++++++-
+ src/libcamera/software_isp/swstats_cpu.h           |   14 +++
+ 7 files changed, 150 insertions(+), 6 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+index 217cd5d..6f04f0d 100644
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -49,6 +49,16 @@ struct DebayerParams {
+ 	CcmLookupTable greenCcm;
+ 	CcmLookupTable blueCcm;
+ 	LookupTable gammaLut;
++
++	/*
++	 * The white line of the sensor for the grey statistics: R/G and B/G
++	 * at one end, their change to the other end, and the distance from
++	 * the line a sample may have, all in 1/1024. A zero distance turns
++	 * the grey statistics off.
++	 */
++	std::array<int32_t, 5> greyLine;
++	/* Black level, in 8-bit units, for the grey statistics */
++	uint8_t greyBlack;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index 939ed6b..f741c1a 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -44,6 +44,17 @@ struct SwIspStats {
+ 	 * \brief A histogram of luminance values
+ 	 */
+ 	Histogram yHistogram;
++	/**
++	 * \brief Sums of the samples whose colour lies near the white line of
++	 * the sensor, black level subtracted, in sensor units
++	 */
++	uint64_t greySumR;
++	uint64_t greySumG;
++	uint64_t greySumB;
++	/**
++	 * \brief Number of such samples
++	 */
++	uint32_t greyCount;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 206a99e..a0df783 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -39,6 +39,8 @@ int Awb::init([[maybe_unused]] IPAContext &context, const YamlObject &tuningData
+ 		whiteCurve_.push_back({ *ct, *r, *b });
+ 	}
+ 
++	greyDistance_ = tuningData["greyDistance"].get<float>(0.0f);
++
+ 	if (!whiteCurve_.empty() && whiteCurve_.size() != 2) {
+ 		LOG(IPASoftAwb, Error) << "whiteCurve takes two points";
+ 		return -EINVAL;
+@@ -62,8 +64,21 @@ int Awb::configure(IPAContext &context, const IPAConfigInfo &configInfo)
+ void Awb::prepare(IPAContext &context,
+ 		  [[maybe_unused]] const uint32_t frame,
+ 		  IPAFrameContext &frameContext,
+-		  [[maybe_unused]] DebayerParams *params)
++		  DebayerParams *params)
+ {
++	params->greyLine = {};
++	if (!whiteCurve_.empty() && greyDistance_ > 0) {
++		const White &w0 = whiteCurve_[0];
++		const White &w1 = whiteCurve_[1];
++		params->greyLine = { {
++			static_cast<int32_t>(w0.r * 1024), static_cast<int32_t>(w0.b * 1024),
++			static_cast<int32_t>((w1.r - w0.r) * 1024),
++			static_cast<int32_t>((w1.b - w0.b) * 1024),
++			static_cast<int32_t>(greyDistance_ * 1024),
++		} };
++	}
++	params->greyBlack = context.activeState.blc.level;
++
+ 	auto &gains = context.activeState.awb.gains;
+ 	/* Just report, the gains are applied in LUT algorithm. */
+ 	frameContext.gains.red = gains.r();
+@@ -126,11 +141,24 @@ void Awb::process(IPAContext &context,
+ 		const White &w1 = whiteCurve_[1];
+ 		const float dr = w1.r - w0.r;
+ 		const float db = w1.b - w0.b;
+-		const float r = static_cast<float>(sumR) / sumG;
+-		const float b = static_cast<float>(sumB) / sumG;
++		/*
++		 * From the samples near the line when there are enough of them:
++		 * a large coloured area does not move them.
++		 */
++		const bool grey = stats->greyCount >= std::max<uint64_t>(64, nPixels / 100) &&
++				  stats->greySumG > 0;
++		const float r = grey ? static_cast<float>(stats->greySumR) / stats->greySumG
++				     : static_cast<float>(sumR) / sumG;
++		const float b = grey ? static_cast<float>(stats->greySumB) / stats->greySumG
++				     : static_cast<float>(sumB) / sumG;
+ 		const float t = std::clamp(((r - w0.r) * dr + (b - w0.b) * db) /
+ 					   (dr * dr + db * db), 0.0f, 1.0f);
+ 
++		LOG(IPASoftAwb, Debug)
++			<< "grey samples " << stats->greyCount << " of " << nPixels
++			<< (grey ? " (used)" : " (not used)") << ", R/G " << r
++			<< " B/G " << b << ", t " << t;
++
+ 		gains = { { 1 / (w0.r + t * dr), 1.0, 1 / (w0.b + t * db) } };
+ 		/* Temperature is linear on the line in mireds. */
+ 		context.activeState.awb.temperatureK =
+diff --git a/src/ipa/simple/algorithms/awb.h b/src/ipa/simple/algorithms/awb.h
+index fe436e2..56a78a7 100644
+--- a/src/ipa/simple/algorithms/awb.h
++++ b/src/ipa/simple/algorithms/awb.h
+@@ -43,6 +43,8 @@ private:
+ 
+ 	/* The two ends of the sensor's white line, from the tuning file */
+ 	std::vector<White> whiteCurve_;
++	/* How far from the line a sample counts as grey, in R/G and B/G */
++	float greyDistance_ = 0;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/libcamera/software_isp/debayer_cpu.cpp b/src/libcamera/software_isp/debayer_cpu.cpp
+index 1a400c6..628f82c 100644
+--- a/src/libcamera/software_isp/debayer_cpu.cpp
++++ b/src/libcamera/software_isp/debayer_cpu.cpp
+@@ -1024,6 +1024,7 @@ void DebayerCpu::process(uint32_t frame, FrameBuffer *input, FrameBuffer *output
+ 		return;
+ 	}
+ 
++	stats_->setGreyLine(params.greyLine, params.greyBlack);
+ 	stats_->startFrame();
+ 
+ 	if (inputConfig_.patternSize.height == 2 && threads_ > 1)
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index b090d4b..2807792 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -11,6 +11,9 @@
+ 
+ #include "swstats_cpu.h"
+ 
++#include <algorithm>
++#include <cmath>
++
+ #include <libcamera/base/log.h>
+ 
+ #include <libcamera/stream.h>
+@@ -141,13 +144,48 @@ static constexpr unsigned int kRedYMul = 77; /* 0.299 * 256 */
+ static constexpr unsigned int kGreenYMul = 150; /* 0.587 * 256 */
+ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 
++/*
++ * Sum a sample apart when its colour lies near the white line (the distance
++ * of the point R/G, B/G to the line, multiplied by G to avoid dividing).
++ */
++inline void SwStatsCpu::greySample(int64_t r, int64_t g, int64_t b, unsigned int div,
++				   uint64_t &sumR, uint64_t &sumG, uint64_t &sumB,
++				   uint32_t &count) const
++{
++	const int64_t black = grey_.black * div;
++	const int64_t R = r - black;
++	const int64_t G = g - black;
++	const int64_t B = b - black;
++
++	if (G < 8 * div || R <= 0 || B <= 0 ||
++	    std::max({ r, g, b }) >= 240 * static_cast<int64_t>(div))
++		return;
++
++	const int64_t u = R * 1024 - grey_.r0 * G;
++	const int64_t v = B * 1024 - grey_.b0 * G;
++	const int64_t across = u * grey_.db - v * grey_.dr;
++	const int64_t along = u * grey_.dr + v * grey_.db;
++	if (std::abs(across) >= grey_.distance * G ||
++	    along <= grey_.tMin * G || along >= grey_.tMax * G)
++		return;
++
++	sumR += R;
++	sumG += G;
++	sumB += B;
++	count++;
++}
++
+ #define SWSTATS_START_LINE_STATS(pixel_t) \
+ 	pixel_t r, g, g2, b;              \
+ 	uint64_t yVal;                    \
+                                           \
+ 	uint64_t sumR = 0;                \
+ 	uint64_t sumG = 0;                \
+-	uint64_t sumB = 0;
++	uint64_t sumB = 0;                \
++	uint64_t greyR = 0;               \
++	uint64_t greyG = 0;               \
++	uint64_t greyB = 0;               \
++	uint32_t greyN = 0;
+ 
+ #define SWSTATS_ACCUMULATE_LINE_STATS(div) \
+ 	sumR += r;                         \
+@@ -157,12 +195,19 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	yVal = r * kRedYMul;               \
+ 	yVal += g * kGreenYMul;            \
+ 	yVal += b * kBlueYMul;             \
+-	stats_.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++;
++	stats_.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++; \
++                                           \
++	if (grey_.enabled)                 \
++		greySample(r, g, b, (div), greyR, greyG, greyB, greyN);
+ 
+ #define SWSTATS_FINISH_LINE_STATS() \
+ 	stats_.sumR_ += sumR;       \
+ 	stats_.sumG_ += sumG;       \
+-	stats_.sumB_ += sumB;
++	stats_.sumB_ += sumB;       \
++	stats_.greySumR += greyR;   \
++	stats_.greySumG += greyG;   \
++	stats_.greySumB += greyB;   \
++	stats_.greyCount += greyN;
+ 
+ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[])
+ {
+@@ -307,6 +352,10 @@ void SwStatsCpu::startFrame(void)
+ 	stats_.sumB_ = 0;
+ 	stats_.sumG_ = 0;
+ 	stats_.yHistogram.fill(0);
++	stats_.greySumR = 0;
++	stats_.greySumG = 0;
++	stats_.greySumB = 0;
++	stats_.greyCount = 0;
+ }
+ 
+ /**
+@@ -441,4 +490,33 @@ void SwStatsCpu::setWindow(const Rectangle &window)
+ 	window_.height &= ~(patternSize_.height - 1);
+ }
+ 
++/**
++ * \brief Set the white line for the grey statistics
++ * \param[in] line R/G, B/G at one end and their change to the other end, and
++ * the distance from the line a sample may have, in 1/1024
++ * \param[in] black The black level, in 8-bit units
++ *
++ * Samples whose colour lies within the distance of the line, between a little
++ * before one end and a little after the other, neither too dark nor near
++ * saturation, are summed apart: the white balance can tell the light from
++ * them, while large coloured areas would mislead the sums of all samples.
++ * A zero distance turns them off.
++ */
++void SwStatsCpu::setGreyLine(const std::array<int32_t, 5> &line, uint8_t black)
++{
++	grey_.enabled = line[4] > 0;
++	if (!grey_.enabled)
++		return;
++
++	grey_.r0 = line[0];
++	grey_.b0 = line[1];
++	grey_.dr = line[2];
++	grey_.db = line[3];
++	const int64_t length2 = grey_.dr * grey_.dr + grey_.db * grey_.db;
++	grey_.distance = line[4] * static_cast<int64_t>(std::sqrt(static_cast<double>(length2)));
++	grey_.tMin = -length2 / 10;
++	grey_.tMax = length2 + length2 / 10;
++	grey_.black = black;
++}
++
+ } /* namespace libcamera */
+diff --git a/src/libcamera/software_isp/swstats_cpu.h b/src/libcamera/software_isp/swstats_cpu.h
+index 7779914..8e3ba4d 100644
+--- a/src/libcamera/software_isp/swstats_cpu.h
++++ b/src/libcamera/software_isp/swstats_cpu.h
+@@ -11,6 +11,7 @@
+ 
+ #pragma once
+ 
++#include <array>
+ #include <stdint.h>
+ 
+ #include <libcamera/base/signal.h>
+@@ -40,6 +41,7 @@ public:
+ 
+ 	int configure(const StreamConfiguration &inputCfg);
+ 	void setWindow(const Rectangle &window);
++	void setGreyLine(const std::array<int32_t, 5> &line, uint8_t black);
+ 	void startFrame();
+ 	void finishFrame(uint32_t frame, uint32_t bufferId);
+ 
+@@ -86,6 +88,18 @@ private:
+ 
+ 	Rectangle window_;
+ 
++	void greySample(int64_t r, int64_t g, int64_t b, unsigned int div,
++			uint64_t &sumR, uint64_t &sumG, uint64_t &sumB,
++			uint32_t &count) const;
++
++	/* The white line for the grey statistics, see setGreyLine() */
++	struct {
++		bool enabled;
++		int64_t r0, b0, dr, db;
++		int64_t distance, tMin, tMax;
++		unsigned int black;
++	} grey_ = {};
++
+ 	Size patternSize_;
+ 
+ 	unsigned int xShift_;

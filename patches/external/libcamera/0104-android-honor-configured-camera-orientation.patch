@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] android: honor explicit camera orientation configuration
+
+The sensor's libcamera rotation property is also used to request native
+capture buffers from the simple pipeline. Keep that pipeline orientation
+unchanged, but allow an explicit per-device HAL configuration to override
+the Android-facing mounting metadata.
+
+Otherwise the HAL only warns about a conflicting configured rotation and
+ignores it. ThinkSmart needs Android orientation 270 rather than the
+sensor-derived 90 to avoid inverted front-camera preview and photographs.
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+
+ src/android/camera_device.cpp |    9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -360,6 +360,9 @@
+ 	 * rotation property in anticlockwise direction. Read the libcamera's
+ 	 * rotation property (anticlockwise) and compute the corresponding
+ 	 * value for clockwise direction as required by the Android orientation
+ 	 * metadata.
++	 *
++	 * A per-device HAL configuration may override the Android metadata
++	 * without changing the sensor's native buffer orientation.
+ 	 */
+ 	const auto &rotation = properties.get(properties::Rotation);
+@@ -367,9 +370,11 @@
+ 		orientation_ = (360 - *rotation) % 360;
+ 		if (cameraConfigData && cameraConfigData->rotation != -1 &&
+ 		    orientation_ != cameraConfigData->rotation) {
+ 			LOG(HAL, Warning)
+-				<< "Camera orientation does not match"
+-				<< " configuration file. Using " << orientation_;
++				<< "Using configured camera orientation "
++				<< cameraConfigData->rotation
++				<< " instead of sensor-derived " << orientation_;
++			orientation_ = cameraConfigData->rotation;
+ 		}
+ 	} else if (cameraConfigData) {
+ 		if (cameraConfigData->rotation == -1) {

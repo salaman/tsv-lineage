@@ -16,3 +16,7 @@ genfscon sysfs /devices/platform/soc@0/200f000.spmi/spmi-0/0-00/200f000.spmi:pmi
 genfscon sysfs /devices/platform/soc@0/c200000.remoteproc/wakeup u:object_r:sysfs_wakeup:s0
 genfscon sysfs /devices/platform/soc@0/7824900.mmc/mmc_host/mmc0/mmc0:0001/block/mmcblk0/queue/discard_max_bytes u:object_r:vendor_thinksmart_sysfs_discard_max_bytes:s0
 genfscon sysfs /devices/virtual/thermal u:object_r:sysfs_thermal:s0
+genfscon sysfs /bus/media/devices u:object_r:vendor_thinksmart_sysfs_camera:s0
+genfscon sysfs /devices/platform/soc@0/1b00020.camss u:object_r:vendor_thinksmart_sysfs_camera:s0
+genfscon sysfs /devices/platform/soc@0/1b0c000.cci u:object_r:vendor_thinksmart_sysfs_camera:s0
+genfscon sysfs /firmware/devicetree/base/soc@0/cci@1b0c000/i2c-bus@0/camera@37 u:object_r:vendor_thinksmart_sysfs_camera:s0

@@ -49,11 +49,22 @@ PRODUCT_PACKAGES += \
 # Keep IPowerStats when replacing the APEX that bundled it with example IPower.
 PRODUCT_PACKAGES += android.hardware.power.stats-service.example
 
+# The common libcamera recipe also declares unqualified FULL and RAW features.
+PRODUCT_PACKAGES += \
+    com.android.hardware.camera.libcamera \
+    android.hardware.camera.front.prebuilt.xml \
+    libcamera_camera_hal.yaml \
+    libcamera_ipa_simple_s5kc505a.yaml \
+    libcamera_ipa_simple_uncalibrated.yaml
+
 PRODUCT_PACKAGES_DEBUG += \
+    cam \
     fsverity \
+    media-ctl \
     tinymix \
     tinycap \
-    tinyplay
+    tinyplay \
+    v4l2-ctl
 
 DEVICE_PACKAGE_OVERLAYS += $(DEVICE_PATH)/overlays/overlay
 
@@ -81,6 +92,7 @@ PRODUCT_SYSTEM_PROPERTIES += \
     sys.use_memfd=true
 
 PRODUCT_VENDOR_PROPERTIES += \
+    ro.hardware.camera=libcamera \
     ro.vendor.qcom.soc.enable_modem_services=0 \
     vendor.powerhal.disp.idle_support=0 \
     vendor.powerhal.interaction.min=1000 \

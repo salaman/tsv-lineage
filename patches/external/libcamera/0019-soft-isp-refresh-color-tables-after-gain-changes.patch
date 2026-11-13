@@ -1,0 +1,50 @@
+From edc625b30bc2c636b181756a1c08ee771356a7ed Mon Sep 17 00:00:00 2001
+From: Alessandro Fontana <alessandro.fontana@pm.me>
+Date: Sun, 1 Nov 2026 22:34:05 +0100
+Subject: [PATCH] ipa: simple: lut: Rebuild the colour tables when the gains
+ change
+
+With the colour matrix enabled the white balance gains are part of the
+lookup tables, which were rebuilt only when the matrix changed, that is
+on a colour temperature change of 100 K. Gains that moved less, or were
+set directly, kept the tables of earlier frames.
+
+Assisted-by: LLM
+Signed-off-by: Alessandro Fontana <alessandro.fontana@pm.me>
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/edc625b30bc2c636b181756a1c08ee771356a7ed
+
+ src/ipa/simple/algorithms/lut.cpp |    4 +++-
+ src/ipa/simple/algorithms/lut.h   |    3 +++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/src/ipa/simple/algorithms/lut.cpp b/src/ipa/simple/algorithms/lut.cpp
+index 5e7b445..49eb3cb 100644
+--- a/src/ipa/simple/algorithms/lut.cpp
++++ b/src/ipa/simple/algorithms/lut.cpp
+@@ -140,7 +140,9 @@ void Lut::prepare(IPAContext &context,
+ 			params->green[i] = gammaTable[static_cast<unsigned int>(lutGains.g())];
+ 			params->blue[i] = gammaTable[static_cast<unsigned int>(lutGains.b())];
+ 		}
+-	} else if (context.activeState.ccm.changed || gammaUpdateNeeded) {
++	} else if (context.activeState.ccm.changed || gammaUpdateNeeded ||
++		   gains != lastGains_) {
++		lastGains_ = gains;
+ 		const auto &ccm = context.activeState.ccm.ccm;
+ 		auto &red = params->redCcm;
+ 		auto &green = params->greenCcm;
+diff --git a/src/ipa/simple/algorithms/lut.h b/src/ipa/simple/algorithms/lut.h
+index 339c4b6..39c6f07 100644
+--- a/src/ipa/simple/algorithms/lut.h
++++ b/src/ipa/simple/algorithms/lut.h
+@@ -40,6 +40,9 @@ private:
+ 	void updateGammaTable(IPAContext &context);
+ 	int16_t ccmValue(float value, float ccm) const;
+ 
++	/* The white balance gains in the colour matrix tables */
++	RGB<float> lastGains_;
++
+ 	/* From the tuning file: the defaults of the gamma curve. */
+ 	float gamma_ = 0.5;
+ 	float contrast_ = 1.0;

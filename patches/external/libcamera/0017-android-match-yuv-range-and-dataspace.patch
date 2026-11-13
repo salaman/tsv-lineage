@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] android: Declare and write full range YUV for camera streams
+
+The YUV post-processor converted the software ISP output with
+libyuv::ARGBToNV12, limited range BT.601, while the HAL declared JFIF
+(full range BT.601) for YCbCr_420_888 streams and left the dataspace
+the client asked for on IMPLEMENTATION_DEFINED ones, which the display
+took as full range BT.709 for the preview. Consumers decoded the data
+with the wrong range and matrix, and the preview had a green cast that
+the JPEG, encoded straight from RGB, did not have.
+
+Declare JFIF for IMPLEMENTATION_DEFINED streams, and limited range
+BT.601 for video encoding, which keeps the conversion it had. Convert
+RGB to NV12 in the range the stream declares: full range through
+libyuv::ARGBToJ420, as libyuv has no full range NV12 conversion. Encode
+the JPEG thumbnail full range too, as libjpeg takes it as JFIF.
+
+The AIDL session reports the dataspace the HAL chose and keeps the
+requested one, as the next configuration repeats it for the streams it
+keeps.
+
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/f3e07c1e1c84d70766343566aba7d72003f88974
+
+ src/android/camera_device.cpp                     |   12 +++++
+ src/android/camera_stream.cpp                     |   18 +++++++-
+ src/android/hal/device/LibcameraDeviceSession.cpp |    6 +++
+ src/android/jpeg/thumbnailer.cpp                  |   13 +++++-
+ src/android/yuv/post_processor_yuv.cpp            |   49 +++++++++++++++++----
+ src/android/yuv/post_processor_yuv.h              |   15 ++++++
+ 6 files changed, 99 insertions(+), 14 deletions(-)
+
+diff --git a/src/android/camera_device.cpp b/src/android/camera_device.cpp
+index 9b99f41..d6f12c1 100644
+--- a/src/android/camera_device.cpp
++++ b/src/android/camera_device.cpp
+@@ -618,6 +618,18 @@ int CameraDevice::configureStreams(camera3_stream_configuration_t *stream_list)
+ 		 */
+ 		stream->usage |= GRALLOC_USAGE_HW_CAMERA_WRITE;
+ 
++		/*
++		 * The HAL chooses the dataspace of IMPLEMENTATION_DEFINED
++		 * streams, and the consumers read it to convert the YUV data:
++		 * declare the range and matrix the YUV post-processor writes,
++		 * limited range BT.601 for video encoding, JFIF otherwise.
++		 */
++		if (stream->format == HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED)
++			stream->data_space =
++				(stream->usage & GRALLOC_USAGE_HW_VIDEO_ENCODER)
++					? HAL_DATASPACE_V0_BT601_625
++					: HAL_DATASPACE_V0_JFIF;
++
+ 		/*
+ 		 * If a CameraStream with the same size and format as the
+ 		 * current stream has already been requested, associate the two.
+diff --git a/src/android/camera_stream.cpp b/src/android/camera_stream.cpp
+index 4a98545..6c1c05f 100644
+--- a/src/android/camera_stream.cpp
++++ b/src/android/camera_stream.cpp
+@@ -85,6 +85,21 @@ Stream *CameraStream::stream() const
+ 	return configuration().stream();
+ }
+ 
++/*
++ * Unknown counts as full range: JFIF is the dataspace of camera YUV
++ * streams unless the client asks for another one.
++ */
++static bool isFullRange(android_dataspace_t dataSpace)
++{
++	switch (dataSpace) {
++	case HAL_DATASPACE_UNKNOWN:
++	case HAL_DATASPACE_JFIF:
++		return true;
++	default:
++		return (dataSpace & HAL_DATASPACE_RANGE_MASK) == HAL_DATASPACE_RANGE_FULL;
++	}
++}
++
+ int CameraStream::configure()
+ {
+ 	if (type_ == Type::Internal || type_ == Type::Mapped) {
+@@ -100,7 +115,8 @@ int CameraStream::configure()
+ 		case formats::NV12:
+ 		case formats::YUYV:
+ 		case formats::XRGB8888:
+-			postProcessor_ = std::make_unique<PostProcessorYuv>();
++			postProcessor_ = std::make_unique<PostProcessorYuv>(
++				isFullRange(camera3Stream_->data_space));
+ 			break;
+ 
+ 		case formats::MJPEG:
+diff --git a/src/android/hal/device/LibcameraDeviceSession.cpp b/src/android/hal/device/LibcameraDeviceSession.cpp
+index a1d7d57..ee36554 100644
+--- a/src/android/hal/device/LibcameraDeviceSession.cpp
++++ b/src/android/hal/device/LibcameraDeviceSession.cpp
+@@ -1086,6 +1086,12 @@ ScopedAStatus LibcameraDeviceSession::configureStreams(
+         out.resize(stream_list.num_streams);
+         for (size_t i = 0; i < stream_list.num_streams; i++) {
+             convertToAidl(static_cast<Camera3Stream*>(streams[i]), &out[i]);
++            // The HAL may override the dataspace, which out[i] reports.
++            // Keep the requested one: the next configuration repeats it
++            // for the streams it keeps.
++            streams[i]->data_space = mapToLegacyDataspace(
++                    static_cast<android_dataspace_t>(
++                            in_requestedConfiguration.streams[i].dataSpace));
+         }
+         mFirstRequest = true;
+         // Increment stream configuration counter for signalStreamFlush race condition handling
+diff --git a/src/android/jpeg/thumbnailer.cpp b/src/android/jpeg/thumbnailer.cpp
+index 6949dec..6da45d1 100644
+--- a/src/android/jpeg/thumbnailer.cpp
++++ b/src/android/jpeg/thumbnailer.cpp
+@@ -14,6 +14,7 @@
+ #include "libcamera/internal/mapped_framebuffer.h"
+ 
+ #include <libyuv/convert_from_argb.h>
++#include <libyuv/planar_functions.h>
+ #include <libyuv/scale_argb.h>
+ 
+ using namespace libcamera;
+@@ -74,9 +75,17 @@ void Thumbnailer::createThumbnail(const FrameBuffer &source,
+ 		libyuv::ARGBScale(frame.planes()[0].data(), sw * 4, sw, sh,
+ 				  scaled.data(), tw * 4, tw, th,
+ 				  libyuv::kFilterBilinear);
+-		libyuv::ARGBToNV12(scaled.data(), tw * 4,
++		/* Full range, as libjpeg encodes it (JFIF) */
++		const unsigned int cw = (tw + 1) / 2;
++		const unsigned int ch = (th + 1) / 2;
++		std::vector<unsigned char> chroma(cw * ch * 2);
++		libyuv::ARGBToJ420(scaled.data(), tw * 4,
+ 				   destination->data(), tw,
+-				   destination->data() + tw * th, tw, tw, th);
++				   chroma.data(), cw,
++				   chroma.data() + cw * ch, cw, tw, th);
++		libyuv::MergeUVPlane(chroma.data(), cw,
++				     chroma.data() + cw * ch, cw,
++				     destination->data() + tw * th, tw, cw, ch);
+ 		return;
+ 	}
+ 
+diff --git a/src/android/yuv/post_processor_yuv.cpp b/src/android/yuv/post_processor_yuv.cpp
+index 3fd8542..686970b 100644
+--- a/src/android/yuv/post_processor_yuv.cpp
++++ b/src/android/yuv/post_processor_yuv.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <libyuv/convert.h>
+ #include <libyuv/convert_from_argb.h>
++#include <libyuv/planar_functions.h>
+ #include <libyuv/scale.h>
+ #include <libyuv/scale_argb.h>
+ 
+@@ -148,10 +149,10 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
+ 			if (static_cast<uint64_t>(cw) * ch < static_cast<uint64_t>(dw) * dh) {
+ 				const size_t lumaSize = static_cast<size_t>(cw) * ch;
+ 				scaled_.resize(lumaSize * 3 / 2);
+-				ret = libyuv::ARGBToNV12(crop, srcStride,
+-							 scaled_.data(), cw,
+-							 scaled_.data() + lumaSize, cw,
+-							 cw, ch);
++				ret = argbToNV12(crop, srcStride,
++						 scaled_.data(), cw,
++						 scaled_.data() + lumaSize, cw,
++						 cw, ch);
+ 				if (ret)
+ 					break;
+ 				ret = libyuv::NV12Scale(scaled_.data(), cw,
+@@ -176,12 +177,12 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
+ 			srcStride = dw * 4;
+ 		}
+ 
+-		ret = libyuv::ARGBToNV12(src, srcStride,
+-					 destination->plane(0).data(),
+-					 destination->stride(0),
+-					 destination->plane(1).data(),
+-					 destination->stride(1),
+-					 dw, dh);
++		ret = argbToNV12(src, srcStride,
++				 destination->plane(0).data(),
++				 destination->stride(0),
++				 destination->plane(1).data(),
++				 destination->stride(1),
++				 dw, dh);
+ 		break;
+ 	}
+ 	default:
+@@ -199,6 +200,34 @@ void PostProcessorYuv::process(Camera3RequestDescriptor::StreamBuffer *streamBuf
+ 	processComplete.emit(streamBuffer, PostProcessor::Status::Success);
+ }
+ 
++/*
++ * Convert to NV12 in the range the stream declares. libyuv has no full
++ * range NV12 conversion: go through I420 and interleave the chroma.
++ */
++int PostProcessorYuv::argbToNV12(const uint8_t *src, int srcStride,
++				 uint8_t *dstY, int dstStrideY,
++				 uint8_t *dstUV, int dstStrideUV,
++				 int width, int height)
++{
++	if (!fullRange_)
++		return libyuv::ARGBToNV12(src, srcStride, dstY, dstStrideY,
++					  dstUV, dstStrideUV, width, height);
++
++	const int cw = (width + 1) / 2;
++	const int ch = (height + 1) / 2;
++	chroma_.resize(static_cast<size_t>(cw) * ch * 2);
++	uint8_t *u = chroma_.data();
++	uint8_t *v = u + static_cast<size_t>(cw) * ch;
++
++	int ret = libyuv::ARGBToJ420(src, srcStride, dstY, dstStrideY,
++				     u, cw, v, cw, width, height);
++	if (ret)
++		return ret;
++
++	libyuv::MergeUVPlane(u, cw, v, cw, dstUV, dstStrideUV, cw, ch);
++	return 0;
++}
++
+ bool PostProcessorYuv::isValidBuffers(const FrameBuffer &source,
+ 				      const CameraBuffer &destination) const
+ {
+diff --git a/src/android/yuv/post_processor_yuv.h b/src/android/yuv/post_processor_yuv.h
+index 50e2548..08b616a 100644
+--- a/src/android/yuv/post_processor_yuv.h
++++ b/src/android/yuv/post_processor_yuv.h
+@@ -16,7 +16,14 @@
+ class PostProcessorYuv : public PostProcessor
+ {
+ public:
+-	PostProcessorYuv() = default;
++	/*
++	 * fullRange selects full range BT.601 (JFIF) for the YUV output of
++	 * RGB sources, limited range BT.601 otherwise.
++	 */
++	explicit PostProcessorYuv(bool fullRange)
++		: fullRange_(fullRange)
++	{
++	}
+ 
+ 	int configure(const libcamera::StreamConfiguration &incfg,
+ 		      const libcamera::StreamConfiguration &outcfg) override;
+@@ -27,12 +34,18 @@ private:
+ 			    const CameraBuffer &destination) const;
+ 	void calculateLengths(const libcamera::StreamConfiguration &inCfg,
+ 			      const libcamera::StreamConfiguration &outCfg);
++	int argbToNV12(const uint8_t *src, int srcStride, uint8_t *dstY,
++		       int dstStrideY, uint8_t *dstUV, int dstStrideUV,
++		       int width, int height);
++
++	bool fullRange_;
+ 
+ 	libcamera::Size sourceSize_;
+ 	libcamera::Size destinationSize_;
+ 	libcamera::PixelFormat sourceFormat_;
+ 	libcamera::PixelFormat destinationFormat_;
+ 	std::vector<uint8_t> scaled_;
++	std::vector<uint8_t> chroma_;
+ 	unsigned int sourceLength_[3] = {};
+ 	unsigned int sourceStride_[3] = {};
+ 	unsigned int sourceNumPlanes_;

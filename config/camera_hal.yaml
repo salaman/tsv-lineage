@@ -1,0 +1,4 @@
+cameras:
+  "/base/soc@0/cci@1b0c000/i2c-bus@0/camera@37":
+    location: front
+    rotation: 270

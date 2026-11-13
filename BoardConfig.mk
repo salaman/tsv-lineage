@@ -96,6 +96,9 @@ BOARD_VENDOR_KERNEL_MODULES_LOAD := \
     venus-core.ko \
     venus-dec.ko \
     venus-enc.ko \
+    i2c-qcom-cci.ko \
+    s5kc505a.ko \
+    qcom-camss.ko \
     ath10k_sdio.ko \
     hci_uart.ko
 

@@ -1,0 +1,34 @@
+From 5eae8715c89f7e908b7ac700be3474a63d9ad7ce Mon Sep 17 00:00:00 2001
+From: Alessandro Fontana <alessandro.fontana@pm.me>
+Date: Sun, 1 Nov 2026 22:34:05 +0100
+Subject: [PATCH] ipa: simple: awb: Report the applied gains as ColourGains
+
+The metadata divided the gains by 1024, a fixed point scale the gains
+no longer have, so ColourGains reported values around 0.001.
+
+Assisted-by: LLM
+Signed-off-by: Alessandro Fontana <alessandro.fontana@pm.me>
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/alessandro-fontana/android_external_libcamera/commit/5eae8715c89f7e908b7ac700be3474a63d9ad7ce
+
+ src/ipa/simple/algorithms/awb.cpp |    5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 3b6266e..e4c9d0d 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -57,10 +57,9 @@ void Awb::process(IPAContext &context,
+ 	const SwIspStats::Histogram &histogram = stats->yHistogram;
+ 	const uint8_t blackLevel = context.activeState.blc.level;
+ 
+-	const float maxGain = 1024.0;
+ 	const float mdGains[] = {
+-		static_cast<float>(frameContext.gains.red / maxGain),
+-		static_cast<float>(frameContext.gains.blue / maxGain)
++		static_cast<float>(frameContext.gains.red),
++		static_cast<float>(frameContext.gains.blue)
+ 	};
+ 	metadata.set(controls::ColourGains, mdGains);
+ 

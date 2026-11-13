@@ -28,3 +28,19 @@ prebuilt_etc {
     src: "config/powerhint.json",
     vendor: true,
 }
+
+prebuilt_etc {
+    name: "libcamera_camera_hal.yaml",
+    src: "config/camera_hal.yaml",
+    filename: "camera_hal.yaml",
+    sub_dir: "libcamera",
+    vendor: true,
+}
+
+prebuilt_etc {
+    name: "libcamera_ipa_simple_s5kc505a.yaml",
+    src: "config/s5kc505a.yaml",
+    filename: "s5kc505a.yaml",
+    sub_dir: "libcamera/ipa/simple",
+    vendor: true,
+}

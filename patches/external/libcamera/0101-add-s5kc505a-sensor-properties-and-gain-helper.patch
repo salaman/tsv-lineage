@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Wed, 11 Nov 2026 21:49:35 -0800
+Subject: [PATCH] libcamera: describe the S5KC505A sensor and analogue gain
+
+Use the vendor-reported 1.4 um pixel size and two-frame control delay
+documented by jethac, rather than the guessed pixel size in Nura's
+properties candidate. The gain helper uses the same code/32 conversion
+and 64/1023 black pedestal as both donors. These are sensor metadata,
+not a measured colour or lens-shading calibration.
+---
+Base-commit: 3becb16c1fa22d79a4d7eeb75a36fc895b4b7abf
+Source: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/streams/camera/s5kc505a-sensor-lib-decode.txt
+Source: https://github.com/rebrch/tsv-nura/blob/6b8abad0b88d66f99df507c98e8af4ef346870f1/camera/upstream/libcamera/0002-ipa-libipa-camera_sensor_helper-Add-Samsung-S5KC505A.patch
+
+ src/ipa/libipa/camera_sensor_helper.cpp           |   12 ++++++++++++
+ src/libcamera/sensor/camera_sensor_properties.cpp |   16 ++++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -509,6 +509,18 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("imx214", CameraSensorHelperImx214)
+ 
++class CameraSensorHelperS5kc505a : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperS5kc505a()
++	{
++		/* RAW10 pedestal 64; analogue gain code 0x20 represents 1x. */
++		blackLevel_ = 4096;
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 32 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("s5kc505a", CameraSensorHelperS5kc505a)
++
+ class CameraSensorHelperImx219 : public CameraSensorHelper
+ {
+ public:
+diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
+--- a/src/libcamera/sensor/camera_sensor_properties.cpp
++++ b/src/libcamera/sensor/camera_sensor_properties.cpp
+@@ -487,6 +487,22 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sensor)
+ 			},
+ 			.sensorDelays = { },
+ 		} },
++		{ "s5kc505a", {
++			.unitCellSize = { 1400, 1400 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
+ 		{ "vd56g3", {
+ 			.unitCellSize = { 2610, 2610 },
+ 			.testPatternModes = {

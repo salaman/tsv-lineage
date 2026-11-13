@@ -71,11 +71,9 @@ for new checkouts.
 | ADSP, Venus, Bluetooth | Stock `modem` partition |
 | GPU zap | Stock `vendor` partition; not `modem/image/gfx.mdt` |
 | Wi-Fi | Stock modem board/firmware/OTP; the helper creates the ath10k container |
-| Speaker DSP tuning | [Community board firmware](https://gitlab.com/kaechele/postmarketos-vendor-lenovo-cd-18781y), revision `337032e864fd6abe29375997fc3683398a4d27c4`, `sound/tas5728m_dsp_lenovo_cd-18781y.bin` |
+| Speaker DSP tuning | [Community board firmware](https://gitlab.com/kaechele/postmarketos-vendor-lenovo-cd-18781y), `sound/tas5728m_dsp_lenovo_cd-18781y.bin` |
 
-The speaker DSP register data comes from Lenovo's released kernel sources.
-Wi-Fi packaging uses the [credited ath10k encoder](tools/README.md) with fixed
-metadata. The extraction helper checks all 29 files against
+The extraction helper checks the firmware files against
 [firmware.sha256](config/firmware.sha256) and refuses an existing output directory.
 Keep firmware private; redistribution permission is not assumed.
 
@@ -138,6 +136,9 @@ source build/envsetup.sh
 lunch lineage_thinksmart cp2a userdebug
 m bootimage recoveryimage systemimage vendorimage
 ```
+
+Use `vendorimage`, not `vendorimage-nodeps`, to include required build
+dependencies such as kernel modules.
 
 Boots are quiet by default; ADB `logcat` and `dmesg` remain available. For
 on-screen diagnostics, export `THINKSMART_BOOT_CONSOLE=true` before `lunch`.
