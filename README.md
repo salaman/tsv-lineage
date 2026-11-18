@@ -65,6 +65,11 @@ userdata/cache/metadata images, **erasing user data and Android metadata**.
 Both preserve GPT, aboot, persist and radio firmware. OTA ZIP installation is
 not supported.
 
+## Home Assistant wall panel
+
+Kiosk Satellite runs on this build. See [KIOSK-SATELLITE.md](KIOSK-SATELLITE.md)
+for the right APK and a setting that makes it much smoother on this GPU.
+
 ## Crash logs
 
 Ramoops uses 1 MiB of reserved RAM to retain crash records and the kernel
