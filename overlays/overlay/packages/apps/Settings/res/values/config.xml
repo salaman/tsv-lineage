@@ -2,4 +2,7 @@
 <resources>
     <bool name="config_show_top_level_battery">false</bool>
     <bool name="config_show_app_info_settings_battery">false</bool>
+    <!-- Two-pane Settings only in landscape (1280 dp): in portrait (800 dp) the second pane
+         (e.g. Network & internet) cost ~430 ms on every cold start. -->
+    <integer name="config_activity_embed_split_min_cur_dp">1000</integer>
 </resources>
