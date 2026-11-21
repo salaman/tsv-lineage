@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+    <ListPreference
+        android:key="mute_action"
+        android:title="@string/mute_title"
+        android:entries="@array/action_entries"
+        android:entryValues="@array/action_values"
+        android:defaultValue="power"
+        android:persistent="false" />
+    <ListPreference
+        android:key="slider_action"
+        android:title="@string/slider_title"
+        android:entries="@array/action_entries"
+        android:entryValues="@array/action_values"
+        android:defaultValue="power"
+        android:persistent="false" />
+    <Preference
+        android:key="note"
+        android:title="@string/note_title"
+        android:summary="@string/note_summary"
+        android:selectable="false" />
+</PreferenceScreen>

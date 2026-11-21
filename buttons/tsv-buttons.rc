@@ -1,0 +1,5 @@
+service vendor.tsv-buttons /vendor/bin/tsv-buttons
+    class main
+    user system
+    group input uhid
+    capabilities BLOCK_SUSPEND

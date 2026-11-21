@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ThinkSmart settings</string>
+    <string name="buttons_title">ThinkSmart buttons</string>
+    <string name="buttons_summary">What the mic-mute button and camera slider do with the screen</string>
+    <string name="mute_title">Mic-mute button</string>
+    <string name="slider_title">Camera privacy slider</string>
+    <string name="note_title">Note</string>
+    <string name="note_summary">The mic-mute button always mutes the microphones in hardware as well, whatever you choose here.</string>
+    <string-array name="action_entries">
+        <item>Turn screen on / off</item>
+        <item>Only turn screen on</item>
+        <item>Only turn screen off</item>
+        <item>Do nothing</item>
+    </string-array>
+    <string-array name="action_values" translatable="false">
+        <item>power</item>
+        <item>wake</item>
+        <item>sleep</item>
+        <item>none</item>
+    </string-array>
+</resources>

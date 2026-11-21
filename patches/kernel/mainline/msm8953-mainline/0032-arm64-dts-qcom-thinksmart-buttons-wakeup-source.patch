@@ -1,0 +1,25 @@
+From: ThinkSmart LineageOS 24 project (tsv-dev)
+Subject: [PATCH] arm64: dts: qcom: thinksmart: make mute button and privacy slider wakeup sources
+
+Let the mic-mute button and camera privacy slider wake the system from
+s2idle, so the vendor tsv-buttons daemon can turn them into a power key
+(the LineageOS 15.1 behaviour).
+
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -54,6 +54,7 @@
+ 			gpios = <&tlmm 87 GPIO_ACTIVE_LOW>;
+ 			linux,code = <SW_CAMERA_LENS_COVER>;
+ 			linux,input-type = <EV_SW>;
++			wakeup-source;
+ 		};
+ 
+ 		mic-mute-swtich {
+@@ -61,6 +62,7 @@
+ 			gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;
+ 			linux,input-type = <EV_SW>;
+ 			linux,code = <SW_MUTE_DEVICE>;
++			wakeup-source;
+ 		};
+ 
+ 		volume-up-key {

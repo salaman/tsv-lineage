@@ -1,0 +1,8 @@
+cc_binary {
+    name: "tsv-buttons",
+    vendor: true,
+    srcs: ["tsv-buttons.c"],
+    shared_libs: ["liblog"],
+    init_rc: ["tsv-buttons.rc"],
+    cflags: ["-Wall", "-Werror"],
+}

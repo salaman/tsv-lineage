@@ -1,0 +1,15 @@
+// ThinkSmart settings: button actions page, injected into Settings > System.
+android_app {
+    name: "ThinkSmartSettings",
+    srcs: ["src/**/*.java"],
+    resource_dirs: ["res"],
+    certificate: "platform",
+    platform_apis: true,
+    privileged: true,
+    system_ext_specific: true,
+    static_libs: [
+        "androidx.preference_preference",
+        "SettingsLibCollapsingToolbarBaseActivity",
+        "SettingsLibSettingsTheme",
+    ],
+}
