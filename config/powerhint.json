@@ -71,7 +71,7 @@
     {
       "PowerHint": "INTERACTION_IDLE_LATENCY",
       "Node": "CPUIdleLatency",
-      "Duration": 250,
+      "Duration": 400,
       "Value": "c8"
     },
     {
@@ -85,6 +85,12 @@
       "Node": "GPUMinFrequency",
       "Duration": 2000,
       "Value": "650000000"
+    },
+    {
+      "PowerHint": "LAUNCH",
+      "Node": "CPUIdleLatency",
+      "Duration": 2000,
+      "Value": "c8"
     },
     {
       "PowerHint": "DISPLAY_UPDATE_IMMINENT",
