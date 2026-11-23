@@ -1,0 +1,3 @@
+# Button actions for the vendor tsv-buttons daemon. Written by ThinkSmartSettings
+# (system_app), read by vendor: system_restricted keeps Treble ownership correct.
+system_restricted_prop(tsv_buttons_prop)

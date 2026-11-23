@@ -26,4 +26,6 @@
         <item>224</item>
         <item>255</item>
     </integer-array>
+    <!-- The privacy slider can act as a power button: opening it must not also launch the camera app. -->
+    <bool name="config_launchCameraOnCameraLensCoverToggle">false</bool>
 </resources>
