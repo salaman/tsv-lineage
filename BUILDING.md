@@ -73,11 +73,10 @@ for new checkouts.
 | Wi-Fi | Stock modem board/firmware/OTP; the helper creates the ath10k container |
 | Speaker DSP tuning | [Community board firmware](https://gitlab.com/kaechele/postmarketos-vendor-lenovo-cd-18781y), `sound/tas5728m_dsp_lenovo_cd-18781y.bin` |
 
-Recorded checksum sets cover stock `CD_18781Y.200628.084` and
-`CD_18781Y.210228.109`, using modem and vendor files from the same release.
-Both include the separately sourced community speaker tuning file.
-The helper accepts either complete checksum set and refuses an existing output
-directory.
+Recorded checksum sets are listed in [`config/firmware-*.sha256`](config/).
+Use modem and vendor files from the same stock release and the separately
+sourced community speaker tuning file. The helper requires a complete
+checksum match and refuses an existing output directory.
 
 For another stock version, put `--allow-unknown` before `--stock` or
 `--android-vendor` to bypass known-set checksums with a warning. Missing or empty
