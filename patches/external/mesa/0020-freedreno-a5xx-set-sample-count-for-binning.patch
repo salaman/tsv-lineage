@@ -1,0 +1,38 @@
+From d75c040db3f9982f65de7e4658918d733ec64c2d Mon Sep 17 00:00:00 2001
+From: Fabricio Akio <fabricioakio@gmail.com>
+Date: Tue, 10 Nov 2026 21:18:05 -0300
+Subject: [PATCH 20/20] freedreno/a5xx: Set the sample count for the binning pass
+
+The binning pass rasterised with whatever sample count the previous
+batch left, as emit_binning_pass() never calls emit_msaa(), unlike the
+tile, restore and sysmem passes. A multisampled render after a
+single-sampled one was binned with the wrong sample count.
+
+Fixes: cf0c7258ee05 ("freedreno/a5xx: MSAA")
+Assisted-by: LLM
+Signed-off-by: Fabricio Akio <fabricioakio@gmail.com>
+Part-of: <https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/46165>
+
+Base-commit: b69adc2adfbfe3eb985bd66cd06c61ca719ae9ae
+Apply in filename order within this project.
+Source: https://gitlab.freedesktop.org/mesa/mesa/-/commit/d75c040db3f9982f65de7e4658918d733ec64c2d
+Backport validation: on Adreno 506, alternating 1x and 4x passes with
+hardware binning on match the no-binning reference for all four individual
+sample masks and the all-samples mask. The unpatched driver drops pixels.
+---
+ src/gallium/drivers/freedreno/a5xx/fd5_gmem.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c b/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
+index 31ba80332fd0..d038a8e27940 100644
+--- a/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
++++ b/src/gallium/drivers/freedreno/a5xx/fd5_gmem.c
+@@ -347,6 +347,8 @@ emit_binning_pass(struct fd_batch *batch) assert_dt
+ 
+    update_vsc_pipe(batch);
+ 
++   emit_msaa(ring, batch->framebuffer.samples);
++
+    OUT_PKT4(ring, REG_A5XX_VPC_MODE_CNTL, 1);
+    OUT_RING(ring, A5XX_VPC_MODE_CNTL_BINNING_PASS);
+ 
