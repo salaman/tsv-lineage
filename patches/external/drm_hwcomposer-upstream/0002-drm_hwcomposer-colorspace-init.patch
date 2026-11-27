@@ -1,0 +1,64 @@
+From ddcdf46ac15718f804e0d69fa06e19f16f027c20 Mon Sep 17 00:00:00 2001
+From: druby-luke <11366524+druby-luke@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 15:29:45 +0100
+Subject: [PATCH] compositor: initialize LayerData::colorspace, treat
+ unspecified as BT.709
+
+Since 'Flatten scene on colorspace mismatch for non-colorpipe devices',
+a scene is flattened to client composition when two layers have different
+colorspaces. LayerData::colorspace had no initializer, and
+HwcLayer::PopulateLayerData() only sets it for a non-default colorspace,
+so a layer with Dataspace::UNKNOWN (e.g. the status bar) compared with an
+indeterminate value (seen: 988867984) and nearly every frame with the
+status bar visible was flattened to the GPU.
+
+Initialize it to kDefault and treat kDefault as kBt709 when comparing,
+because SurfaceFlinger treats UNKNOWN as sRGB.
+---
+ compositor/CompositionPlanner.h | 14 +++++++++++---
+ compositor/LayerData.h          |  2 +-
+ 2 files changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/compositor/CompositionPlanner.h b/compositor/CompositionPlanner.h
+index 8a07451..c507d7f 100644
+--- a/compositor/CompositionPlanner.h
++++ b/compositor/CompositionPlanner.h
+@@ -109,11 +109,19 @@ class CompositionPlanner {
+       return false;
+     }
+ 
+-    auto get_colorspace = [](const auto& item) {
++    // SurfaceFlinger treats an UNKNOWN dataspace (kDefault) as sRGB, which has
++    // BT.709 primaries; e.g. the status bar is UNKNOWN while apps are V0_SRGB.
++    // Treating them as different would flatten nearly every frame.
++    auto normalize = [](auto colorspace) {
++      using Colorspace = decltype(colorspace);
++      return colorspace == Colorspace::kDefault ? Colorspace::kBt709
++                                                : colorspace;
++    };
++    auto get_colorspace = [&normalize](const auto& item) {
+       if constexpr (std::is_pointer_v<std::decay_t<decltype(item)>>) {
+-        return item->GetLayerData().colorspace;
++        return normalize(item->GetLayerData().colorspace);
+       } else {
+-        return item.layer->GetLayerData().colorspace;
++        return normalize(item.layer->GetLayerData().colorspace);
+       }
+     };
+ 
+diff --git a/compositor/LayerData.h b/compositor/LayerData.h
+index e944426..ad19594 100644
+--- a/compositor/LayerData.h
++++ b/compositor/LayerData.h
+@@ -144,7 +144,7 @@ struct LayerData {
+   std::shared_ptr<IDrmFbIdHandle> fb;
+   PresentInfo pi;
+   SharedFd acquire_fence;
+-  HwcColorspace colorspace;
++  HwcColorspace colorspace{};
+   TransferFunction transfer_func;
+   FrameTimeHistory frame_time_history;
+   std::optional<float> brightness;
+-- 
+2.56.1
+

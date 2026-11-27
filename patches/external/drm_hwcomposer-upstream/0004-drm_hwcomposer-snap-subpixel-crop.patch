@@ -1,0 +1,161 @@
+From 2a9359dd7a26419437e81be923ff33d1d4b3c47f Mon Sep 17 00:00:00 2001
+From: druby-luke <11366524+druby-luke@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:13:26 +0100
+Subject: [PATCH] hwc: optionally snap sub-pixel layer geometry to whole pixels
+
+Layers that move with fractional positions get a display frame rounded
+outwards by SurfaceFlinger (a 640 px wide SurfaceView at x = 38.6 gets a
+641 px wide display frame) or a fractional source crop.
+RequireScalingOrPhasing() treats that as scaling, so on a KMS driver
+without a scaler (msm8953 DPU) the layer is client composited in just
+those frames, test commits fail with -ENODEV, and the composition plan
+alternates between frames. On a ThinkSmart View this starved the
+producers of moving SurfaceViews (60 -> 37 fps).
+
+With vendor.hwc.drm.snap_subpixel_crop=1, if source and destination
+differ by at most one pixel, both use the smaller size, with a
+whole-pixel source offset inside the original crop. The error is at most
+one pixel at the layer's edge. Default off.
+---
+ hwc/HwcLayer.cpp     | 61 ++++++++++++++++++++++++++++++++++++++++++++
+ hwc/HwcLayer.h       |  1 +
+ utils/properties.cpp |  6 +++++
+ utils/properties.h   |  1 +
+ 4 files changed, 69 insertions(+)
+
+diff --git a/hwc/HwcLayer.cpp b/hwc/HwcLayer.cpp
+index 459b0af..14e971a 100644
+--- a/hwc/HwcLayer.cpp
++++ b/hwc/HwcLayer.cpp
+@@ -16,7 +16,10 @@
+ 
+ #include "HwcLayer.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <cstdint>
++#include <utility>
+ 
+ #include "bufferinfo/BufferInfo.h"
+ #include "compositor/DisplayInfo.h"
+@@ -24,6 +27,7 @@
+ #include "compositor/LayerData.h"
+ #include "drm/DrmDevice.h"
+ #include "utils/log.h"
++#include "utils/properties.h"
+ 
+ namespace android::drm_hwcomposer {
+ 
+@@ -82,11 +86,68 @@ void HwcLayer::SetLayerProperties(const LayerProperties& layer_properties) {
+     brightness_ = layer_properties.brightness;
+   }
+ 
++  if (Properties::SnapSubpixelCrop() &&
++      (layer_properties.source_crop || layer_properties.display_frame ||
++       layer_properties.transform)) {
++    SnapSubpixelCrop();
++  }
++
+   if (has_buffer_set_) {
+     PopulateLayerData();
+   }
+ }
+ 
++// Layers that move with fractional positions get a display frame rounded
++// outwards by SurfaceFlinger (e.g. a 640 px wide buffer at x = 38.6 becomes
++// a 641 px wide display frame) or a fractional source crop. That counts as
++// scaling/phasing, which a KMS driver without a scaler cannot do, so the
++// layer is client composited in just those frames and the composition plan
++// alternates. If source and destination differ by at most one pixel, use the
++// smaller of the two sizes for both, with a whole-pixel source offset inside
++// the original crop. The error is at most one pixel at the layer's edge.
++void HwcLayer::SnapSubpixelCrop() {
++  auto& src_opt = layer_data_.pi.source_crop.f_rect;
++  auto& dst_opt = layer_data_.pi.display_frame.i_rect;
++  if (!src_opt || !dst_opt) {
++    return;
++  }
++  auto& src = *src_opt;
++  auto& dst = *dst_opt;
++  const bool rot = layer_data_.pi.transform.rotate90;
++  // Destination extent along the source's x and y axes.
++  const int32_t dst_x = rot ? dst.Height() : dst.Width();
++  const int32_t dst_y = rot ? dst.Width() : dst.Height();
++  if (dst_x <= 0 || dst_y <= 0 ||
++      std::fabs(src.Width() - static_cast<float>(dst_x)) > 1.0F ||
++      std::fabs(src.Height() - static_cast<float>(dst_y)) > 1.0F) {
++    return;
++  }
++  // Largest whole-pixel span inside [lo, hi] that is not larger than |dst_len|.
++  auto snap = [](float lo, float hi, int32_t dst_len) {
++    const float first = std::ceil(lo - 0.5F);  // round, but stay >= lo - 0.5
++    const float last = std::floor(hi + 0.5F);
++    const auto len = static_cast<int32_t>(
++        std::min(static_cast<float>(dst_len), std::max(last - first, 0.0F)));
++    return std::make_pair(std::max(first, 0.0F), len);
++  };
++  const auto [sx, len_x] = snap(src.left, src.right, dst_x);
++  const auto [sy, len_y] = snap(src.top, src.bottom, dst_y);
++  if (len_x <= 0 || len_y <= 0) {
++    return;
++  }
++  src = {.left = sx,
++         .top = sy,
++         .right = sx + static_cast<float>(len_x),
++         .bottom = sy + static_cast<float>(len_y)};
++  if (rot) {
++    dst.right = dst.left + len_y;
++    dst.bottom = dst.top + len_x;
++  } else {
++    dst.right = dst.left + len_x;
++    dst.bottom = dst.top + len_y;
++  }
++}
++
+ void HwcLayer::PopulateLayerData() {
+   if (!layer_data_.bi) {
+     ALOGE("Internal error: PopulateLayerData called without valid bi.");
+diff --git a/hwc/HwcLayer.h b/hwc/HwcLayer.h
+index 95e7b6d..ba70d98 100644
+--- a/hwc/HwcLayer.h
++++ b/hwc/HwcLayer.h
+@@ -115,6 +115,7 @@ class HwcLayer {
+   uint32_t GetPixOps() const;
+ 
+  private:
++  void SnapSubpixelCrop();
+   void PopulateLayerData();
+ 
+   friend class CompositorTestUtils;
+diff --git a/utils/properties.cpp b/utils/properties.cpp
+index cc3e862..3e04653 100644
+--- a/utils/properties.cpp
++++ b/utils/properties.cpp
+@@ -158,6 +158,12 @@ auto Properties::ScaleWithGpu() -> bool {
+   return (property_get_bool("vendor.hwc.drm.scale_with_gpu", 0) != 0);
+ }
+ 
++auto Properties::SnapSubpixelCrop() -> bool {
++  static const bool kSnap = property_get_bool(
++                                "vendor.hwc.drm.snap_subpixel_crop", 0) != 0;
++  return kSnap;
++}
++
+ auto Properties::EnableVirtualDisplay() -> bool {
+   return (property_get_bool("vendor.hwc.drm.enable_virtual_display", 0) != 0);
+ }
+diff --git a/utils/properties.h b/utils/properties.h
+index fc53c57..4289326 100644
+--- a/utils/properties.h
++++ b/utils/properties.h
+@@ -33,6 +33,7 @@ class Properties {
+   static auto InternalDisplayNames() -> std::string;
+   static auto UseOverlayPlanes() -> bool;
+   static auto ScaleWithGpu() -> bool;
++  static auto SnapSubpixelCrop() -> bool;
+   static auto EnableVirtualDisplay() -> bool;
+   static auto EnableExternalDisplays() -> bool;
+   static auto EnableHdcpOnHotplug() -> bool;
+-- 
+2.56.1
+

@@ -1,0 +1,95 @@
+From e69e131d1783353bc1697c4e983ef5bdf146ffdd Mon Sep 17 00:00:00 2001
+From: druby-luke <11366524+druby-luke@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 17:49:07 +0100
+Subject: [PATCH] compositor: keep the client range stable between frames
+
+GenericCompositionPlanner recomputes the client range every frame. With
+moving layers the set of layers that must be client composited changes
+(a layer sliding partly off-screen briefly needs scaling by one pixel,
+which a DPU without scaler cannot do), and so does the cheapest window.
+Layers then move between planes and the client target every few frames,
+which delays buffer releases: on a ThinkSmart View (msm8953 DPU) an app's
+RenderThread spent 5.5 s of 10 s in waitForBufferRelease and a
+SurfaceView dropped from 58 to 37 fps.
+
+Keep the previous range while the layer stack is unchanged, the range
+still contains all layers that must be client composited, it still fits
+the available planes, and it costs at most 4/3 of the best range's GPU
+pixops.
+---
+ compositor/GenericCompositionPlanner.cpp | 33 ++++++++++++++++++++++--
+ compositor/GenericCompositionPlanner.h   |  7 ++++-
+ 2 files changed, 37 insertions(+), 3 deletions(-)
+
+diff --git a/compositor/GenericCompositionPlanner.cpp b/compositor/GenericCompositionPlanner.cpp
+index dbbd02a..e17da4b 100644
+--- a/compositor/GenericCompositionPlanner.cpp
++++ b/compositor/GenericCompositionPlanner.cpp
+@@ -164,8 +164,37 @@ std::tuple<size_t, size_t> GenericCompositionPlanner::GetClientLayers(
+     }
+   }
+ 
+-  return GetExtraClientRange(display, layers, client_start, client_size,
+-                             use_cursor_plane);
++  auto best = GetExtraClientRange(display, layers, client_start, client_size,
++                                  use_cursor_plane);
++
++  // Hysteresis. The set of layers that must be client composited can change
++  // from frame to frame (e.g. a layer sliding partly off-screen briefly needs
++  // scaling by one pixel), and so can the cheapest window. Each switch moves
++  // buffers between planes and the client target, which delays buffer
++  // releases and starves producers: on a ThinkSmart View (msm8953 DPU, no
++  // scaler) moving SurfaceViews dropped from 60 to 37 fps. Keep the previous
++  // range while the layer stack is unchanged, the range still contains every
++  // layer that must be client composited, still fits the planes, and costs at
++  // most 4/3 of the best range's GPU pixops.
++  if (layers == last_layers_ && last_client_size_ != 0 &&
++      (client_size == 0 ||
++       (last_client_start_ <= client_start &&
++        client_start + client_size <= last_client_start_ + last_client_size_))) {
++    const auto kept = GetExtraClientRange(display, layers, last_client_start_,
++                                          last_client_size_, use_cursor_plane);
++    const auto& [best_start, best_size] = best;
++    const auto& [kept_start, kept_size] = kept;
++    if (kept_start == last_client_start_ && kept_size == last_client_size_ &&
++        static_cast<uint64_t>(CalcPixOps(layers, kept_start, kept_size)) * 3 <=
++            static_cast<uint64_t>(CalcPixOps(layers, best_start, best_size)) *
++                4) {
++      best = kept;
++    }
++  }
++
++  last_layers_ = layers;
++  std::tie(last_client_start_, last_client_size_) = best;
++  return best;
+ }
+ 
+ bool GenericCompositionPlanner::IsClientLayer(const ICompositorDisplay* display,
+diff --git a/compositor/GenericCompositionPlanner.h b/compositor/GenericCompositionPlanner.h
+index d43053c..35284a4 100644
+--- a/compositor/GenericCompositionPlanner.h
++++ b/compositor/GenericCompositionPlanner.h
+@@ -36,7 +36,7 @@ class GenericCompositionPlanner : public CompositionPlanner {
+   ValidationResult ValidateDisplay(const ICompositorDisplay* display) override;
+ 
+  private:
+-  static std::tuple<size_t, size_t> GetClientLayers(
++  std::tuple<size_t, size_t> GetClientLayers(
+       const ICompositorDisplay* display,
+       const std::vector<const HwcLayer*>& layers, bool use_cursor_plane);
+   static bool IsClientLayer(const ICompositorDisplay* display,
+@@ -52,6 +52,11 @@ class GenericCompositionPlanner : public CompositionPlanner {
+       const ICompositorDisplay* display,
+       const std::vector<const HwcLayer*>& layers, size_t client_start,
+       size_t client_size, bool use_cursor_plane);
++
++  // Client range chosen for the previous frame (see GetClientLayers).
++  std::vector<const HwcLayer*> last_layers_;
++  size_t last_client_start_ = 0;
++  size_t last_client_size_ = 0;
+ };
+ 
+ }  // namespace android::drm_hwcomposer
+-- 
+2.56.1
+
