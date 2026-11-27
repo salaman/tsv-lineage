@@ -1,0 +1,11 @@
+type vendor_thinksmart_gpu_watchdog, domain;
+type vendor_thinksmart_gpu_watchdog_exec, exec_type, vendor_file_type, file_type;
+type vendor_thinksmart_gpu_watchdog_data_file, file_type, data_file_type;
+init_daemon_domain(vendor_thinksmart_gpu_watchdog)
+
+unix_socket_connect(vendor_thinksmart_gpu_watchdog, logdr, logd)
+set_prop(vendor_thinksmart_gpu_watchdog, powerctl_prop)
+allow vendor_thinksmart_gpu_watchdog vendor_data_file:dir search;
+allow vendor_thinksmart_gpu_watchdog vendor_thinksmart_gpu_watchdog_data_file:dir { open read search write add_name remove_name };
+allow vendor_thinksmart_gpu_watchdog vendor_thinksmart_gpu_watchdog_data_file:file { create getattr open write unlink };
+allow vendor_init vendor_thinksmart_gpu_watchdog_data_file:dir create_dir_perms;

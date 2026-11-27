@@ -11,3 +11,5 @@
 /mnt/vendor/persist-overlayfs-(upperdir|workdir)(/.*)? u:object_r:vendor_thinksmart_persist_file:s0
 
 /vendor/bin/hw/android\.hardware\.health-service\.thinksmart u:object_r:hal_health_default_exec:s0
+/vendor/bin/thinksmart_gpu_watchdog u:object_r:vendor_thinksmart_gpu_watchdog_exec:s0
+/data/vendor/thinksmart_gpu_watchdog(/.*)? u:object_r:vendor_thinksmart_gpu_watchdog_data_file:s0

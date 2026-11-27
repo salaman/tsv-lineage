@@ -1,0 +1,26 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_defaults {
+    name: "thinksmart_gpu_watchdog_defaults",
+    cpp_std: "c++20",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}
+
+cc_binary {
+    name: "thinksmart_gpu_watchdog",
+    defaults: ["thinksmart_gpu_watchdog_defaults"],
+    vendor: true,
+    srcs: ["watchdog.cpp"],
+    init_rc: ["thinksmart_gpu_watchdog.rc"],
+    shared_libs: ["libbase", "liblog"],
+}
+
+cc_test_host {
+    name: "thinksmart_gpu_watchdog_test",
+    defaults: ["thinksmart_gpu_watchdog_defaults"],
+    srcs: ["WatchdogTest.cpp"],
+}

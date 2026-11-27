@@ -71,6 +71,14 @@ Ramoops uses 1 MiB of reserved RAM to retain crash records and the kernel
 console across warm reboots, **not cold resets or power loss**. Kernel panics
 request a warm reboot after 10 seconds; the hardware watchdog can also reset a
 hung system.
+
+The GPU watchdog handles a narrower failure: after a one-minute startup grace
+period, it requests a warm reboot if MSM reports the same stalled ring and
+fences for at least 25 seconds. It saves the ring and fence numbers in
+`/data/vendor/thinksmart_gpu_watchdog/last_reboot` before rebooting. That file
+also prevents another automatic GPU reboot until the monitor sees 15 minutes
+without a hangcheck report. The regular hardware watchdog is unchanged.
+
 Collect logs after an unexpected reboot, before rebooting again:
 
 ```sh
