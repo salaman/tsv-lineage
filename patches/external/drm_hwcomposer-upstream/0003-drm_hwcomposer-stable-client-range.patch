@@ -1,0 +1,94 @@
+From 475aef6ef0a047d53967a4dd9dc27c30c1c180de Mon Sep 17 00:00:00 2001
+From: druby-luke <11366524+druby-luke@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 17:03:36 +0100
+Subject: [PATCH] compositor: keep the client range stable between frames
+
+GenericCompositionPlanner picks, every frame, the client window with the
+fewest GPU pixops. With moving layers (translucent SurfaceViews sliding
+partly off-screen) two windows can alternate as the cheapest, so layers
+move between planes and the client target every few frames. Each switch
+delays buffer releases: on a ThinkSmart View (msm8953 DPU) an app's
+RenderThread spent 5.5 s of 10 s in waitForBufferRelease and a
+SurfaceView dropped from 58 to 37 fps.
+
+Remember the previous window for an unchanged layer stack and keep it
+while it costs at most 4/3 of the best window's GPU pixops.
+---
+ compositor/GenericCompositionPlanner.cpp | 20 ++++++++++++++++++++
+ compositor/GenericCompositionPlanner.h   | 10 ++++++++--
+ 2 files changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/compositor/GenericCompositionPlanner.cpp b/compositor/GenericCompositionPlanner.cpp
+index dbbd02a..b8af59c 100644
+--- a/compositor/GenericCompositionPlanner.cpp
++++ b/compositor/GenericCompositionPlanner.cpp
+@@ -270,15 +270,35 @@ std::tuple<size_t, size_t> GenericCompositionPlanner::GetExtraClientRange(
+     // Use a sliding window to determine the client range that results in the
+     // fewest GPU pixops.
+     uint32_t gpu_pixops = UINT32_MAX;
++    uint32_t last_pixops = UINT32_MAX;
+     for (size_t i = 0; i < steps; i++) {
+       const uint32_t po = CalcPixOps(layers, start + i, client_size);
+       if (po < gpu_pixops) {
+         gpu_pixops = po;
+         client_start = start + i;
+       }
++      if (layers == last_layers_ && start + i == last_client_start_ &&
++          client_size == last_client_size_) {
++        last_pixops = po;
++      }
++    }
++
++    // Hysteresis: moving layers (partly off-screen, changing size) can make two
++    // windows alternate as the cheapest one from frame to frame. Every switch
++    // moves buffers between planes and the client target, which delays buffer
++    // releases and starves producers. Keep the previous window unless the new
++    // one saves more than a quarter of its GPU pixops.
++    if (last_pixops != UINT32_MAX &&
++        static_cast<uint64_t>(last_pixops) * 3 <=
++            static_cast<uint64_t>(gpu_pixops) * 4) {
++      client_start = last_client_start_;
+     }
+   }
+ 
++  last_layers_ = layers;
++  last_client_start_ = client_start;
++  last_client_size_ = client_size;
++
+   return std::make_tuple(client_start, client_size);
+ }
+ 
+diff --git a/compositor/GenericCompositionPlanner.h b/compositor/GenericCompositionPlanner.h
+index d43053c..210ae3c 100644
+--- a/compositor/GenericCompositionPlanner.h
++++ b/compositor/GenericCompositionPlanner.h
+@@ -36,7 +36,7 @@ class GenericCompositionPlanner : public CompositionPlanner {
+   ValidationResult ValidateDisplay(const ICompositorDisplay* display) override;
+ 
+  private:
+-  static std::tuple<size_t, size_t> GetClientLayers(
++  std::tuple<size_t, size_t> GetClientLayers(
+       const ICompositorDisplay* display,
+       const std::vector<const HwcLayer*>& layers, bool use_cursor_plane);
+   static bool IsClientLayer(const ICompositorDisplay* display,
+@@ -48,10 +48,16 @@ class GenericCompositionPlanner : public CompositionPlanner {
+   static bool HardwareSupportsLayerType(CompositionType comp_type);
+   static uint32_t CalcPixOps(const std::vector<const HwcLayer*>& layers,
+                              size_t first_z, size_t size);
+-  static std::tuple<size_t, size_t> GetExtraClientRange(
++  std::tuple<size_t, size_t> GetExtraClientRange(
+       const ICompositorDisplay* display,
+       const std::vector<const HwcLayer*>& layers, size_t client_start,
+       size_t client_size, bool use_cursor_plane);
++
++  // Client range chosen for the previous frame, kept while the layer stack is
++  // unchanged and it stays close to the best range (see GetExtraClientRange).
++  std::vector<const HwcLayer*> last_layers_;
++  size_t last_client_start_ = 0;
++  size_t last_client_size_ = 0;
+ };
+ 
+ }  // namespace android::drm_hwcomposer
+-- 
+2.56.1
+
