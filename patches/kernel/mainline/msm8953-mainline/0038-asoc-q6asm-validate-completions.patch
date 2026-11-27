@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 21:48:09 +0100
+Subject: [PATCH] ASoC: qcom: q6asm: validate the buffer token of data done
+ events
+
+The WRITE_DONE and READ_DONE events from the ADSP carry the index of the
+period buffer in the APR token. q6asm_stream_callback() uses it to index
+port->buf before checking it, so a bad token from the DSP reads past the
+end of the buffer array. The read path also moves hw_ptr before the buffer
+address is checked, so a mismatched address still advances the capture
+position.
+
+Check the token against num_periods under ac->lock before using it, and
+update hw_ptr in the read path only after the address matched, as the
+write path already does. q6asm_audio_client_free_buf() zeroes num_periods
+under the lock before it frees the array, so a late event in that window
+is ignored like one without buffers. The invalid token messages are rate
+limited, as the DSP can trigger them.
+
+Fixes: 68fd8480bb7b ("ASoC: qdsp6: q6asm: Add support to audio stream apis")
+Cc: stable@vger.kernel.org
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/1dfffc34ef9efc43797d33a57ba7d7bd0641b303
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ sound/soc/qcom/qdsp6/q6asm.c | 33 ++++++++++++++++++++++++---------
+ 1 file changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm.c b/sound/soc/qcom/qdsp6/q6asm.c
+index 8dde9a3b9c76..dacfbd0a02ae 100644
+--- a/sound/soc/qcom/qdsp6/q6asm.c
++++ b/sound/soc/qcom/qdsp6/q6asm.c
+@@ -679,23 +679,30 @@ static int32_t q6asm_stream_callback(struct apr_device *adev,
+ 		client_event = ASM_CLIENT_EVENT_DATA_WRITE_DONE;
+ 		if (ac->io_mode & ASM_SYNC_IO_MODE) {
+ 			phys_addr_t phys;
+-			int token = hdr->token & ASM_WRITE_TOKEN_MASK;
++			u32 token = hdr->token & ASM_WRITE_TOKEN_MASK;
+ 
+ 			guard(spinlock_irqsave)(&ac->lock);
+ 
+ 			port =  &ac->port[SNDRV_PCM_STREAM_PLAYBACK];
+ 
+-			if (!port->buf) {
++			/* num_periods is 0 once the buffers are being freed */
++			if (!port->buf || !port->num_periods) {
+ 				ret = 0;
+ 				goto done;
+ 			}
+ 
++			if (token >= port->num_periods) {
++				dev_err_ratelimited(ac->dev, "Invalid write token %u\n",
++						    token);
++				ret = -EINVAL;
++				goto done;
++			}
++
+ 			phys = port->buf[token].phys;
+ 
+ 			if (lower_32_bits(phys) != result->opcode ||
+ 			    upper_32_bits(phys) != result->status) {
+-				dev_err(ac->dev, "Expected addr %pa\n",
+-					&port->buf[token].phys);
++				dev_err(ac->dev, "Expected addr %pa\n", &phys);
+ 				ret = -EINVAL;
+ 				goto done;
+ 			}
+@@ -706,27 +713,35 @@ static int32_t q6asm_stream_callback(struct apr_device *adev,
+ 		client_event = ASM_CLIENT_EVENT_DATA_READ_DONE;
+ 		if (ac->io_mode & ASM_SYNC_IO_MODE) {
+ 			struct asm_data_cmd_read_v2_done *done = data->payload;
++			u32 token = hdr->token;
+ 			phys_addr_t phys;
+ 
+ 			guard(spinlock_irqsave)(&ac->lock);
+ 			port =  &ac->port[SNDRV_PCM_STREAM_CAPTURE];
+-			if (!port->buf) {
++			/* num_periods is 0 once the buffers are being freed */
++			if (!port->buf || !port->num_periods) {
+ 				ret = 0;
+ 				goto done;
+ 			}
+ 
+-			phys = port->buf[hdr->token].phys;
+-			atomic_set(&port->hw_ptr, hdr->token + 1);
++			if (token >= port->num_periods) {
++				dev_err_ratelimited(ac->dev, "Invalid read token %u\n",
++						    token);
++				ret = -EINVAL;
++				goto done;
++			}
++
++			phys = port->buf[token].phys;
+ 
+ 			if (upper_32_bits(phys) != done->buf_addr_msw ||
+ 			    lower_32_bits(phys) != done->buf_addr_lsw) {
+ 				dev_err(ac->dev, "Expected addr %pa %08x-%08x\n",
+-					&port->buf[hdr->token].phys,
+-					done->buf_addr_lsw,
++					&phys, done->buf_addr_lsw,
+ 					done->buf_addr_msw);
+ 				ret = -EINVAL;
+ 				goto done;
+ 			}
++			atomic_set(&port->hw_ptr, token + 1);
+ 		}
+ 
+ 		break;

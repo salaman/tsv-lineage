@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 20:43:15 +0100
+Subject: [PATCH] dt-bindings: net: bluetooth: qcom,qca2066-bt: Document
+ QCA9379
+
+The Bluetooth part of the QCA9379 WLAN/BT combo chip is set up by
+hci_qca like the QCA6174 (ROME), over UART with an enable GPIO and the
+32 kHz sleep clock, and loads its rampatch and NVM by the controller
+version it reports. Document it with qcom,qca6174-bt as the fallback.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/1d498dceaffffb189420680ab378b13effee8f51
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ .../bindings/net/bluetooth/qcom,qca2066-bt.yaml        | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/net/bluetooth/qcom,qca2066-bt.yaml b/Documentation/devicetree/bindings/net/bluetooth/qcom,qca2066-bt.yaml
+index d4f167c9b7e1..79a2ae5ce294 100644
+--- a/Documentation/devicetree/bindings/net/bluetooth/qcom,qca2066-bt.yaml
++++ b/Documentation/devicetree/bindings/net/bluetooth/qcom,qca2066-bt.yaml
+@@ -12,9 +12,13 @@ maintainers:
+ 
+ properties:
+   compatible:
+-    enum:
+-      - qcom,qca2066-bt
+-      - qcom,qca6174-bt
++    oneOf:
++      - enum:
++          - qcom,qca2066-bt
++          - qcom,qca6174-bt
++      - items:
++          - const: qcom,qca9379-bt
++          - const: qcom,qca6174-bt
+ 
+   clocks:
+     items:

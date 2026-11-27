@@ -1,0 +1,264 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Thu, 26 Nov 2026 18:45:46 -0800
+Subject: [PATCH] media: qcom: camss: vfe-4-1: program RDI frame geometry
+
+In frame based mode (RDI) the write master buffer configuration
+(WR_BUFFER_CFG: words per line, height, burst length) was never written.
+The vendor msm_vfe40_axi_cfg_wm_reg() programs it for frame based write
+masters too. On MSM8953 RDI frames tear or get cut without it.
+
+Add an optional wm_frame_size operation and implement it for VFE 4.1,
+limited to MSM8953 (and SDM450): the vendor uses a different burst length
+on MSM8916 and MSM8939, which are left unchanged.
+
+The height field is 12 bits wide. Limit the MSM8953 RDI sink pad and
+video node formats to 4096 lines and report that limit in
+enum_framesizes, so link validation rejects a taller input.
+vfe_enable_output() rejects an invalid height as a final safeguard.
+Apply the height limit only to RDI, retaining Linux 7.3's separate PIX
+and RDI stride alignment.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/55efe142d878ea2969a49e54e5017ca191d0f9f7
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ drivers/media/platform/qcom/camss/camss-vfe-4-1.c  | 22 ++++++++++++++++++++++
+ drivers/media/platform/qcom/camss/camss-vfe-gen1.c |  9 +++++++++
+ drivers/media/platform/qcom/camss/camss-vfe-gen1.h |  2 ++
+ drivers/media/platform/qcom/camss/camss-vfe.c      | 21 +++++++++------------
+ drivers/media/platform/qcom/camss/camss-vfe.h      |  7 +++++++
+ drivers/media/platform/qcom/camss/camss-video.c    |  5 ++---
+ drivers/media/platform/qcom/camss/camss-video.h    |  3 +++
+ drivers/media/platform/qcom/camss/camss.c          |  2 ++
+ 8 files changed, 56 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+index 87ba5cdc3098a739a1fc567f6bb665cba165ee69..ba4346423d74bc56f92a67db143246c26753d850 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+@@ -293,6 +293,27 @@ static void vfe_wm_frame_based(struct vfe_device *vfe, u8 wm, u8 enable)
+ 			1 << VFE_0_BUS_IMAGE_MASTER_n_WR_CFG_FRM_BASED_SHIFT);
+ }
+ 
++/*
++ * MSM8953 needs the buffer geometry in frame based mode as well. The height
++ * field is 12 bits wide, rdi_max_height in vfe_res_8x53 keeps it in range.
++ */
++static void vfe_wm_frame_size(struct vfe_device *vfe, u8 wm,
++			      struct v4l2_pix_format_mplane *pix)
++{
++	u32 wpl = DIV_ROUND_UP(pix->plane_fmt[0].bytesperline, 8);
++	u32 reg;
++
++	if (vfe->camss->res->version != CAMSS_8x53)
++		return;
++
++	reg = 0x3;
++	reg |= (pix->height - 1) << 4;
++	reg |= wpl << 16;
++
++	writel_relaxed(reg, vfe->base +
++		       VFE_0_BUS_IMAGE_MASTER_n_WR_BUFFER_CFG(wm));
++}
++
+ static void vfe_get_wm_sizes(struct v4l2_pix_format_mplane *pix, u8 plane,
+ 			     u16 *width, u16 *height, u16 *bytesperline)
+ {
+@@ -1012,6 +1033,7 @@ static const struct vfe_hw_ops_gen1 vfe_ops_gen1_4_1 = {
+ 	.set_xbar_cfg = vfe_set_xbar_cfg,
+ 	.wm_enable = vfe_wm_enable,
+ 	.wm_frame_based = vfe_wm_frame_based,
++	.wm_frame_size = vfe_wm_frame_size,
+ 	.wm_get_ping_pong_status = vfe_wm_get_ping_pong_status,
+ 	.wm_line_based = vfe_wm_line_based,
+ 	.wm_set_framedrop_pattern = vfe_wm_set_framedrop_pattern,
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-gen1.c b/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
+index fe71056a1891fc9fc1d2d083c8685e3e6a6f66d6..ecad9e8548f134e40d024e4330057e4c5635de60 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
+@@ -171,6 +171,7 @@ static int vfe_enable_output(struct vfe_line *line)
+ 	struct vfe_output *output = &line->output;
+ 	const struct vfe_hw_ops *ops = vfe->res->hw_ops;
+ 	struct media_pad *sensor_pad;
++	u32 height = line->video_out.active_fmt.fmt.pix_mp.height;
+ 	unsigned long flags;
+ 	unsigned int frame_skip = 0;
+ 	unsigned int i;
+@@ -180,6 +181,11 @@ static int vfe_enable_output(struct vfe_line *line)
+ 	if (!ub_size)
+ 		return -EINVAL;
+ 
++	if (line->id != VFE_LINE_PIX && height > vfe_rdi_max_height(vfe)) {
++		dev_err(vfe->camss->dev, "RDI frame height %u too large\n", height);
++		return -EINVAL;
++	}
++
+ 	sensor_pad = camss_find_sensor_pad(&line->subdev.entity);
+ 	if (sensor_pad) {
+ 		struct v4l2_subdev *subdev =
+@@ -245,6 +251,9 @@ static int vfe_enable_output(struct vfe_line *line)
+ 		vfe->ops_gen1->wm_set_ub_cfg(vfe, output->wm_idx[0],
+ 					    (ub_size + 1) * output->wm_idx[0], ub_size);
+ 		vfe->ops_gen1->wm_frame_based(vfe, output->wm_idx[0], 1);
++		if (vfe->ops_gen1->wm_frame_size)
++			vfe->ops_gen1->wm_frame_size(vfe, output->wm_idx[0],
++						     &line->video_out.active_fmt.fmt.pix_mp);
+ 		vfe->ops_gen1->wm_enable(vfe, output->wm_idx[0], 1);
+ 		vfe->ops_gen1->bus_reload_wm(vfe, output->wm_idx[0]);
+ 	} else {
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-gen1.h b/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
+index 5b9a63504d420363f8bcda45f3ee814ff6dbe794..f6db0fc8f119635b6489d57634dd0bd14e075ed4 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
++++ b/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
+@@ -45,6 +45,8 @@ struct vfe_hw_ops_gen1 {
+ 	void (*set_qos)(struct vfe_device *vfe);
+ 	void (*set_xbar_cfg)(struct vfe_device *vfe, struct vfe_output *output, u8 enable);
+ 	void (*wm_frame_based)(struct vfe_device *vfe, u8 wm, u8 enable);
++	void (*wm_frame_size)(struct vfe_device *vfe, u8 wm,
++			      struct v4l2_pix_format_mplane *pix);
+ 	void (*wm_line_based)(struct vfe_device *vfe, u32 wm, struct v4l2_pix_format_mplane *pix,
+ 			      u8 plane, u32 enable);
+ 	void (*wm_set_ub_cfg)(struct vfe_device *vfe, u8 wm, u16 offset, u16 depth);
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
+index a8c6d5c80c33369fb0b6ebccb6cdfd7da6155f0c..6d5936f83a21c7d2601f380c943725050ce7ee74 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe.c
+@@ -1444,7 +1444,9 @@ static void vfe_try_format(struct vfe_line *line,
+ 			fmt->code = MEDIA_BUS_FMT_UYVY8_1X16;
+ 
+ 		fmt->width = clamp_t(u32, fmt->width, 1, 8191);
+-		fmt->height = clamp_t(u32, fmt->height, 1, 8191);
++		fmt->height = clamp_t(u32, fmt->height, 1,
++				      line->id == VFE_LINE_PIX ? 8191 :
++				      vfe_rdi_max_height(to_vfe(line)));
+ 
+ 		fmt->field = V4L2_FIELD_NONE;
+ 		fmt->colorspace = V4L2_COLORSPACE_SRGB;
+@@ -1925,17 +1927,11 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
+ 	}
+ 
+ 	if (vfe->res->has_vbif) {
+-		struct resource *vbif;
+-
+-		vbif = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+-						    vfe->res->vbif_name);
+-		/* The VBIF region is optional in the MSM8953 binding */
+-		if (vbif || camss->res->version != CAMSS_8x53) {
+-			vfe->vbif_base = devm_ioremap_resource(dev, vbif);
+-			if (IS_ERR(vfe->vbif_base)) {
+-				dev_err(dev, "could not map vbif memory\n");
+-				return PTR_ERR(vfe->vbif_base);
+-			}
++		vfe->vbif_base = devm_platform_ioremap_resource_byname(pdev,
++								       vfe->res->vbif_name);
++		if (IS_ERR(vfe->vbif_base)) {
++			dev_err(dev, "could not map vbif memory\n");
++			return PTR_ERR(vfe->vbif_base);
+ 		}
+ 	}
+ 
+@@ -2211,6 +2207,7 @@ int msm_vfe_register_entities(struct vfe_device *vfe,
+ 		} else {
+ 			video_out->bpl_alignment = vfe_bpl_align_rdi(vfe);
+ 			video_out->line_based = 0;
++			video_out->max_height = vfe_rdi_max_height(vfe);
+ 		}
+ 
+ 		video_out->nformats = vfe->line[i].nformats;
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.h b/drivers/media/platform/qcom/camss/camss-vfe.h
+index a2188a81bcfc4c2a6747f92dd707972cf42998de..b1dd247eb8a02d95401709050400c50fd89182b8 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.h
++++ b/drivers/media/platform/qcom/camss/camss-vfe.h
+@@ -138,6 +138,7 @@ struct vfe_subdev_resources {
+ 	char *pd_name;
+ 	bool has_vbif;
+ 	char *vbif_name;
++	u16 rdi_max_height; /* 0 means CAMSS_FRAME_MAX_HEIGHT_RDI */
+ 	const struct vfe_hw_ops *hw_ops;
+ 	const struct camss_formats *formats_rdi;
+ 	const struct camss_formats *formats_pix;
+@@ -275,6 +276,12 @@ bool vfe_is_lite(struct vfe_device *vfe);
+  * Return vfe hw version
+  */
+ u32 vfe_hw_version(struct vfe_device *vfe);
++
++static inline u32 vfe_rdi_max_height(const struct vfe_device *vfe)
++{
++	return vfe->res->rdi_max_height ?: CAMSS_FRAME_MAX_HEIGHT_RDI;
++}
++
+ /*
+  * vfe_enable - Enable streaming on VFE line
+  * @line: VFE line
+diff --git a/drivers/media/platform/qcom/camss/camss-video.c b/drivers/media/platform/qcom/camss/camss-video.c
+index 0852eb6f13154cfae7147ce39d22de64d14a5cba..2cb71360f691e65a333c6e12fe6395e1d02ad085 100644
+--- a/drivers/media/platform/qcom/camss/camss-video.c
++++ b/drivers/media/platform/qcom/camss/camss-video.c
+@@ -21,7 +21,6 @@
+ #define CAMSS_FRAME_MIN_WIDTH		1
+ #define CAMSS_FRAME_MAX_WIDTH		8191
+ #define CAMSS_FRAME_MIN_HEIGHT		1
+-#define CAMSS_FRAME_MAX_HEIGHT_RDI	8191
+ #define CAMSS_FRAME_MAX_HEIGHT_PIX	4096
+ 
+ /* -----------------------------------------------------------------------------
+@@ -444,7 +443,7 @@ static int video_enum_framesizes(struct file *file, void *fh,
+ 	fsize->stepwise.max_width = CAMSS_FRAME_MAX_WIDTH;
+ 	fsize->stepwise.min_height = CAMSS_FRAME_MIN_HEIGHT;
+ 	fsize->stepwise.max_height = (video->line_based) ?
+-		CAMSS_FRAME_MAX_HEIGHT_PIX : CAMSS_FRAME_MAX_HEIGHT_RDI;
++		CAMSS_FRAME_MAX_HEIGHT_PIX : video->max_height;
+ 	fsize->stepwise.step_width = 1;
+ 	fsize->stepwise.step_height = 1;
+ 
+@@ -502,7 +501,7 @@ static int __video_try_fmt(struct camss_video *video, struct v4l2_format *f)
+ 
+ 	pix_mp->pixelformat = fi->pixelformat;
+ 	pix_mp->width = clamp_t(u32, width, 1, CAMSS_FRAME_MAX_WIDTH);
+-	pix_mp->height = clamp_t(u32, height, 1, CAMSS_FRAME_MAX_HEIGHT_RDI);
++	pix_mp->height = clamp_t(u32, height, 1, video->max_height);
+ 	pix_mp->num_planes = fi->planes;
+ 	for (i = 0; i < pix_mp->num_planes; i++) {
+ 		bpl = pix_mp->width / fi->hsub[i].numerator *
+diff --git a/drivers/media/platform/qcom/camss/camss-video.h b/drivers/media/platform/qcom/camss/camss-video.h
+index d3e56e240a8880e0c1779085bd90b8ce43306a64..14f1c5ede208160a5c39907143200236f1d7682f 100644
+--- a/drivers/media/platform/qcom/camss/camss-video.h
++++ b/drivers/media/platform/qcom/camss/camss-video.h
+@@ -27,6 +27,8 @@ struct camss_buffer {
+ 
+ struct camss_video;
+ 
++#define CAMSS_FRAME_MAX_HEIGHT_RDI	8191
++
+ struct camss_video_ops {
+ 	int (*queue_buffer)(struct camss_video *vid, struct camss_buffer *buf);
+ 	int (*flush_buffers)(struct camss_video *vid,
+@@ -46,6 +48,7 @@ struct camss_video {
+ 	struct mutex q_lock;
+ 	unsigned int bpl_alignment;
+ 	unsigned int line_based;
++	unsigned int max_height; /* set by the VFE */
+ 	const struct camss_format_info *formats;
+ 	unsigned int nformats;
+ };
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index e503fabdb57b558d5fa6c51e3bfe7b9af2b7c07d..15fe5880b6b962da36f0dba82dfc2d5d4206024e 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -466,6 +466,7 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 			.pd_name = "vfe0",
+ 			.has_vbif = true,
+ 			.vbif_name = "vfe0_vbif",
++			.rdi_max_height = 4096,
+ 			.hw_ops = &vfe_ops_4_1,
+ 			.formats_rdi = &vfe_formats_rdi_8x16,
+ 			.formats_pix = &vfe_formats_pix_8x16
+@@ -494,6 +495,7 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 			.pd_name = "vfe1",
+ 			.has_vbif = true,
+ 			.vbif_name = "vfe1_vbif",
++			.rdi_max_height = 4096,
+ 			.hw_ops = &vfe_ops_4_1,
+ 			.formats_rdi = &vfe_formats_rdi_8x16,
+ 			.formats_pix = &vfe_formats_pix_8x16

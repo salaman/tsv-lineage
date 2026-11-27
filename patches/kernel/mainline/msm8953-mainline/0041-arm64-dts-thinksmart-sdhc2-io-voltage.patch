@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 20:43:25 +0100
+Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo-cd-18781y: run the SDHC2 I/O
+ supply at 1.8 V
+
+L12 is the vqmmc supply of SDHC2, which carries the QCA9379 WLAN card
+over SDIO. Its range of 1.8-2.95 V lets sdhci-msm advertise 3.0 V
+signalling (sdhci_msm_set_regulator_caps() sets CORE_3_0V_SUPPORT), so
+whenever the host turns the supply on, msm_toggle_vqmmc() first sets it
+to the 3.3 V level, which L12 serves at 2.95 V, and the card is only
+switched to 1.8 V later during UHS initialization.
+
+The stock DT restricts the SDHC2 I/O supply to 1.8 V
+(qcom,vdd-io-voltage-level = <1800000 1800000>). Limit L12 to 1.8 V as
+well. L12 has no other consumer. No failure was isolated to the 2.95 V
+phase alone.
+
+Assisted-by: Claude:claude-opus-5-5
+Assisted-by: Codex:gpt-6.2-astra
+Source: https://github.com/isilweo/linux/commit/3ca5b5ccc4d319252ef7f81736a3f8b2eb683405
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index 175fad331479..c9ce485920d3 100644
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -508,7 +508,7 @@ pm8953_l11: l11 {
+ 
+ 		pm8953_l12: l12 {
+ 			regulator-min-microvolt = <1800000>;
+-			regulator-max-microvolt = <2950000>;
++			regulator-max-microvolt = <1800000>;
+ 		};
+ 
+ 		pm8953_l13: l13 {

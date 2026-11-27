@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] media: qcom: camss: drop the low VFE clock levels on MSM8953
+
+For RDI the computed VFE rate is about 45 MHz, which cannot keep up with
+the memory writes on MSM8953 and drops lines. The vendor software runs the
+VFE at 266.67 MHz. Start the MSM8953 (and SDM450) VFE clock table at that
+level.
+
+Tested on MSM8953 with an S5KC505A at 1304x980 RDI: the VFE runs at
+266.67 MHz and libcamera captures at 30.4 fps without sequence gaps.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/67c43fe73975320a4f827f80b8aa7b2db2c80e6b
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ drivers/media/platform/qcom/camss/camss.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index 85837e579210..9cbff8c7b95e 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -452,9 +452,8 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 		.clock_rate = { { 0 },
+ 				{ 0 },
+ 				{ 0 },
+-				{ 50000000, 100000000, 133330000,
+-				  160000000, 200000000, 266670000,
+-				  310000000, 400000000, 465000000 },
++				{ 266670000, 310000000, 400000000,
++				  465000000 },
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 0 } },
+@@ -481,9 +480,8 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 		.clock_rate = { { 0 },
+ 				{ 0 },
+ 				{ 0 },
+-				{ 50000000, 100000000, 133330000,
+-				  160000000, 200000000, 266670000,
+-				  310000000, 400000000, 465000000 },
++				{ 266670000, 310000000, 400000000,
++				  465000000 },
+ 				{ 0 },
+ 				{ 0 },
+ 				{ 0 } },

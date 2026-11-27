@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Thu, 26 Nov 2026 18:45:46 -0800
+Subject: [PATCH] media: venus: keep MSM8953 decoder powered while OUTPUT streams
+
+MSM8953 can hang when runtime suspend cuts the video clocks while the
+firmware still holds input, including while waiting for CAPTURE after a
+source change. Hold the decoder PM reference from OUTPUT STREAMON until
+STREAMOFF has attempted its flush. Drop it on a failed start and clear
+the queue state even if the flush fails. Keep other SoCs' existing
+runtime suspend behavior.
+
+Source: https://github.com/isilweo/linux/commit/7b9f422d903eefbd8299cd5bcc0f956c5c8a435e
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ drivers/media/platform/qcom/venus/core.c |  1 +
+ drivers/media/platform/qcom/venus/core.h |  1 +
+ drivers/media/platform/qcom/venus/vdec.c | 30 ++++++++++++++++++++----------
+ 3 files changed, 22 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/venus/core.c b/drivers/media/platform/qcom/venus/core.c
+index 67a728320c3f14830409f72ea073f72ab0e805d8..195e4322c6fb0f98af99ab0232dbc99246592f03 100644
+--- a/drivers/media/platform/qcom/venus/core.c
++++ b/drivers/media/platform/qcom/venus/core.c
+@@ -981,6 +981,7 @@ static const struct venus_resources msm8953_res = {
+ 	.cp_nonpixel_size = 0x24800000,
+ 	.dma_mask = 0xddc00000 - 1,
+ 	.fwname = "venus.mdt", /* FIXME */
++	.keep_dec_powered_while_streaming = true,
+ };
+ 
+ static const struct freq_tbl sc7180_freq_table[] = {
+diff --git a/drivers/media/platform/qcom/venus/core.h b/drivers/media/platform/qcom/venus/core.h
+index 9b704a0d1a6d7d9f61bb59156778590052834734..ad62f33a5301531a62c600b0c69af11d15ed6e3e 100644
+--- a/drivers/media/platform/qcom/venus/core.h
++++ b/drivers/media/platform/qcom/venus/core.h
+@@ -112,6 +112,7 @@ struct venus_resources {
+ 	const char *enc_nodename;
+ 	const char *dec_nodename;
+ 	const struct firmware_version *min_fw;
++	bool keep_dec_powered_while_streaming;
+ };
+ 
+ enum venus_fmt {
+diff --git a/drivers/media/platform/qcom/venus/vdec.c b/drivers/media/platform/qcom/venus/vdec.c
+index a6b68b3fee7cc0f0bb7973ab3cbcdeaba1d66f97..8899fba83fba4e21f9c644ca200fbd40a2d30ae6 100644
+--- a/drivers/media/platform/qcom/venus/vdec.c
++++ b/drivers/media/platform/qcom/venus/vdec.c
+@@ -1319,7 +1319,8 @@ static int vdec_start_output(struct venus_inst *inst)
+ 	inst->codec_state = VENUS_DEC_STATE_INIT;
+ 
+ done:
+-	inst->streamon_out = 1;
++	if (!ret)
++		inst->streamon_out = 1;
+ 	return ret;
+ }
+ 
+@@ -1338,6 +1339,7 @@ static void vdec_drop_delayed_bufs(struct venus_inst *inst)
+ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
+ {
+ 	struct venus_inst *inst = vb2_get_drv_priv(q);
++	bool keep_powered = inst->core->res->keep_dec_powered_while_streaming;
+ 	int ret;
+ 
+ 	mutex_lock(&inst->lock);
+@@ -1353,11 +1355,16 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
+ 		if (ret)
+ 			goto put_power;
+ 
+-		ret = vdec_pm_put(inst, true);
+-		if (ret)
+-			goto error;
++		if (!keep_powered) {
++			ret = vdec_pm_put(inst, true);
++			if (ret)
++				goto error;
++		}
+ 
++		/* Keep the clocks on while firmware holds input, even without CAPTURE. */
+ 		ret = vdec_start_output(inst);
++		if (ret && keep_powered)
++			goto put_power;
+ 	}
+ 
+ 	if (ret)
+@@ -1470,6 +1477,7 @@ static int vdec_stop_output(struct venus_inst *inst)
+ static void vdec_stop_streaming(struct vb2_queue *q)
+ {
+ 	struct venus_inst *inst = vb2_get_drv_priv(q);
++	bool put_power = false;
+ 	int ret = -EINVAL;
+ 
+ 	vdec_eos_cancel(inst);
+@@ -1490,16 +1498,18 @@ static void vdec_stop_streaming(struct vb2_queue *q)
+ 
+ 	inst->session_error = 0;
+ 
+-	if (ret)
+-		goto unlock;
+-
+-	if (q->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)
++	if (V4L2_TYPE_IS_OUTPUT(q->type)) {
++		put_power = inst->streamon_out &&
++			    inst->core->res->keep_dec_powered_while_streaming;
+ 		inst->streamon_out = 0;
+-	else
++	} else if (!ret) {
+ 		inst->streamon_cap = 0;
++	}
+ 
+-unlock:
+ 	mutex_unlock(&inst->lock);
++
++	if (put_power)
++		vdec_pm_put(inst, true);
+ }
+ 
+ static void vdec_session_release(struct venus_inst *inst)

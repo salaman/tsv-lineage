@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] arm64: dts: qcom: msm8953: add the camss VFE VBIF regions
+
+Add the VFE0 and VFE1 VBIF register regions to the camss node so the
+driver can apply the VBIF QoS setting.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/5f2105fbe03944f013161026af44625c3d658fdd
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ arch/arm64/boot/dts/qcom/msm8953.dtsi | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/msm8953.dtsi b/arch/arm64/boot/dts/qcom/msm8953.dtsi
+index 79838fc01e0e..c51b3da9b931 100644
+--- a/arch/arm64/boot/dts/qcom/msm8953.dtsi
++++ b/arch/arm64/boot/dts/qcom/msm8953.dtsi
+@@ -1761,7 +1761,9 @@ camss: camss@1b00020 {
+ 			      <0x1b00040 0x4>,
+ 			      <0x1b31000 0x500>,
+ 			      <0x1b10000 0x1000>,
+-			      <0x1b14000 0x1000>;
++			      <0x1b14000 0x1000>,
++			      <0x1b40000 0x200>,
++			      <0x1ba0000 0x200>;
+ 			reg-names = "csi_clk_mux",
+ 				    "csid0",
+ 				    "csid1",
+@@ -1774,7 +1776,9 @@ camss: camss@1b00020 {
+ 				    "csiphy2_clk_mux",
+ 				    "ispif",
+ 				    "vfe0",
+-				    "vfe1";
++				    "vfe1",
++				    "vfe0_vbif",
++				    "vfe1_vbif";
+ 
+ 			clocks = <&gcc GCC_CAMSS_AHB_CLK>,
+ 				 <&gcc GCC_CAMSS_CSI0_CLK>,

@@ -1,27 +1,29 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Christopher Paslawski <chris@paslawski.me>
+From: Chris Paslawski <chris@paslawski.me>
 Date: Sun, 25 Oct 2026 21:40:34 -0700
 Subject: [PATCH] iio: light: vcnl4200: use active-force proximity acquisition
 
-Use active-force conversions for polled VCNL4200 proximity reads instead of
-continuous autonomous measurements during ALS use. Keep upstream shared
-runtime power management and 16-bit output. Leave current, pulse count and
-integration time to the board's Android init configuration.
+Enable the ThinkSmart View's VCNL4200 with its VDD and VIO supplies and
+falling-edge interrupt. At probe, allow 2.5 ms after enabling supplies
+before the first I2C access on VCNL4040 and VCNL4200.
 
-Restore normal measurements only while proximity threshold events are
-enabled, and restore the previous mode if enabling those events fails.
-Register the board sensor with its VDD and VIO supplies and correct IRQ
-polarity.
+Use active-force conversions for polled VCNL4200 proximity reads so
+ambient-light sensing does not leave the IR LED pulsing continuously.
+Switch to autonomous conversions only while proximity threshold events
+are enabled, restoring the previous mode if that transition fails.
+Keep the shared runtime PM and 16-bit output, and leave LED current,
+pulse count and integration time to Android init.
 
-Origin: Local ThinkSmart View port
-Source: https://github.com/msm8953-mainline/linux
-Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
-Apply in filename order within this project.
-
-
+Origin: Local ThinkSmart View integration
+Source: https://github.com/isilweo/linux/commit/3c975d2d00da81f754a211043d706c12990b8730
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
 ---
+ .../boot/dts/qcom/apq8053-lenovo-cd-18781y.dts     | 13 +++--
+ drivers/iio/light/vcnl4000.c                       | 68 ++++++++++++++++++++--
+ 2 files changed, 71 insertions(+), 10 deletions(-)
+
 diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
-index 82a5a6de6d00..fe6fa0b60507 100644
+index 82a5a6de6d000ed3664ea0796715717d028c555b..fe6fa0b605077f4039535e360a77309f2243c401 100644
 --- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 +++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 @@ -114,20 +114,21 @@
@@ -53,7 +55,7 @@ index 82a5a6de6d00..fe6fa0b60507 100644
  	};
  
 diff --git a/drivers/iio/light/vcnl4000.c b/drivers/iio/light/vcnl4000.c
-index 336468d59ea7..339dde54b24a 100644
+index 336468d59ea7fe555145d3aeff473ce5f8d858c5..9421dfe805dad5c3d2122983a14f81a96202217c 100644
 --- a/drivers/iio/light/vcnl4000.c
 +++ b/drivers/iio/light/vcnl4000.c
 @@ -73,6 +73,8 @@
@@ -65,7 +67,15 @@ index 336468d59ea7..339dde54b24a 100644
  
  #define VCNL4040_DEV_ID		0x0c /* Device ID and version */
  
-@@ -399,6 +401,8 @@
+@@ -226,6 +228,7 @@ struct vcnl4000_chip_spec {
+ 	const int(*als_it_times)[][2];
+ 	const int num_als_it_times;
+ 	const unsigned int ulux_step;
++	const unsigned int power_up_delay_us;
+ 	const int prod_id;
+ };
+ 
+@@ -399,6 +402,8 @@ static int vcnl4200_init(struct vcnl4000_data *data)
  		return ret;
  
  	regval = ret | VCNL4040_CONF3_PS_SAMPLE_16BITS;
@@ -74,7 +84,7 @@ index 336468d59ea7..339dde54b24a 100644
  	ret = i2c_smbus_write_word_data(client, VCNL4200_PS_CONF3, regval);
  	if (ret < 0)
  		return ret;
-@@ -505,7 +509,34 @@
+@@ -505,7 +510,34 @@ static int vcnl4000_measure_proximity(struct vcnl4000_data *data, int *val)
  
  static int vcnl4200_measure_proximity(struct vcnl4000_data *data, int *val)
  {
@@ -110,7 +120,7 @@ index 336468d59ea7..339dde54b24a 100644
  }
  
  static int vcnl4010_read_proxy_samp_freq(struct vcnl4000_data *data, int *val,
-@@ -1413,7 +1444,7 @@
+@@ -1413,7 +1445,7 @@ static int vcnl4040_write_event_config(struct iio_dev *indio_dev,
  				       enum iio_event_direction dir,
  				       bool state)
  {
@@ -119,7 +129,7 @@ index 336468d59ea7..339dde54b24a 100644
  	u16 val, mask;
  	struct vcnl4000_data *data = iio_priv(indio_dev);
  
-@@ -1445,8 +1476,29 @@
+@@ -1445,8 +1477,29 @@ static int vcnl4040_write_event_config(struct iio_dev *indio_dev,
  
  		val = state ? (ret | mask) : (ret & ~mask);
  
@@ -151,3 +161,31 @@ index 336468d59ea7..339dde54b24a 100644
  	default:
  		return -EINVAL;
  	}
+@@ -1854,6 +1907,8 @@ static const struct vcnl4000_chip_spec vcnl4040_spec = {
+ 	.als_it_times = &vcnl4040_als_it_times,
+ 	.num_als_it_times = ARRAY_SIZE(vcnl4040_als_it_times),
+ 	.ulux_step = 100000,
++	/* Vishay application note 84307 */
++	.power_up_delay_us = 2500,
+ 	.prod_id = VCNL4040_PROD_ID,
+ };
+ 
+@@ -1873,6 +1928,8 @@ static const struct vcnl4000_chip_spec vcnl4200_spec = {
+ 	.als_it_times = &vcnl4200_als_it_times,
+ 	.num_als_it_times = ARRAY_SIZE(vcnl4200_als_it_times),
+ 	.ulux_step = 24000,
++	/* Vishay application note 84327 */
++	.power_up_delay_us = 2500,
+ 	.prod_id = VCNL4200_PROD_ID,
+ };
+ 
+@@ -1936,6 +1993,9 @@ static int vcnl4000_probe(struct i2c_client *client)
+ 	if (ret)
+ 		return ret;
+ 
++	if (data->chip_spec->power_up_delay_us)
++		fsleep(data->chip_spec->power_up_delay_us);
++
+ 	ret = data->chip_spec->init(data);
+ 	if (ret < 0)
+ 		return ret;

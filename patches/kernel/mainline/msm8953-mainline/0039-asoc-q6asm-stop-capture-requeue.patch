@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Paslawski <chris@paslawski.me>
+Date: Thu, 26 Nov 2026 18:45:46 -0800
+Subject: [PATCH] ASoC: qcom: q6asm-dai: stop queueing capture reads after STOP
+
+Since commit cee3e63e7106 ("ASoC: qcom: q6asm-dai: do not set stream
+state in event and trigger callbacks") the trigger STOP only sends EOS
+and the stream state stays RUNNING until the next prepare or close. The
+READ_DONE handler requeues a read whenever that state is RUNNING, so after
+STOP every READ_DONE from the DSP queues the next read, and the driver
+keeps calling snd_pcm_period_elapsed() for a stream that ALSA has
+stopped, until the application prepares or closes the PCM.
+
+Requeue a read only while ALSA runs the stream (RUNNING) or will resume
+it without a prepare (PAUSED, or SUSPENDED from one of these). Check the
+ALSA state under the PCM stream lock, after the period accounting and
+together with sending the read, so a concurrent or XRUN stop is seen.
+ALSA sets that state itself, so this also covers a stop whose trigger
+DPCM defers and a prepare from SUSPENDED, which skips the STOP trigger.
+q6asm_read() only allocates with GFP_ATOMIC and sends without waiting,
+like the trigger commands already sent under that lock.
+
+The reads in flight at STOP complete without being requeued. The next
+prepare closes the stream and queues a fresh set. A START rolled back
+by STOP can still leave fewer reads queued for a retry without prepare.
+
+Fixes: cee3e63e7106 ("ASoC: qcom: q6asm-dai: do not set stream state in event and trigger callbacks")
+Cc: stable@vger.kernel.org
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/71bac9c12f1e42521aeb825a7e2c3474b6114fb1
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 29 ++++++++++++++++++++++++++---
+ 1 file changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index c21f3201b82f67844b3ea2fbb8a557d0901dc10e..0adbcb2bed345c54cfbe51cbf0b10854a1eb71c8 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -179,11 +179,32 @@ static const struct snd_compr_codec_caps q6asm_compr_caps = {
+ 	.descriptor[0].formats = 0,
+ };
+ 
++/*
++ * Requeue a capture read only while ALSA runs the stream. PAUSE and SUSPEND
++ * resume without a prepare that would queue the reads again, so they keep
++ * the reads in circulation. Called under the PCM stream lock.
++ */
++static bool q6asm_dai_requeue_read(struct snd_pcm_runtime *runtime)
++{
++	snd_pcm_state_t state;
++
++	if (!runtime)
++		return false;
++
++	state = runtime->state;
++	if (state == SNDRV_PCM_STATE_SUSPENDED)
++		state = runtime->suspended_state;
++
++	return state == SNDRV_PCM_STATE_RUNNING ||
++	       state == SNDRV_PCM_STATE_PAUSED;
++}
++
+ static void event_handler(uint32_t opcode, uint32_t token,
+ 			  void *payload, void *priv)
+ {
+ 	struct q6asm_dai_rtd *prtd = priv;
+ 	struct snd_pcm_substream *substream = prtd->substream;
++	unsigned long flags;
+ 
+ 	switch (opcode) {
+ 	case ASM_CLIENT_EVENT_CMD_RUN_DONE:
+@@ -194,10 +215,12 @@ static void event_handler(uint32_t opcode, uint32_t token,
+ 		snd_pcm_period_elapsed(substream);
+ 		break;
+ 	case ASM_CLIENT_EVENT_DATA_READ_DONE:
+-		snd_pcm_period_elapsed(substream);
+-		if (prtd->state == Q6ASM_STREAM_RUNNING)
++		snd_pcm_stream_lock_irqsave(substream, flags);
++		snd_pcm_period_elapsed_under_stream_lock(substream);
++		if (prtd->state == Q6ASM_STREAM_RUNNING &&
++		    q6asm_dai_requeue_read(substream->runtime))
+ 			q6asm_read(prtd->audio_client, prtd->stream_id);
+-
++		snd_pcm_stream_unlock_irqrestore(substream, flags);
+ 		break;
+ 	default:
+ 		break;

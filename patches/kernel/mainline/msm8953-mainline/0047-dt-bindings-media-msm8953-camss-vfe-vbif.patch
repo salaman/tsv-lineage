@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] dt-bindings: media: qcom,msm8953-camss: add the VFE VBIF
+ regions
+
+Each MSM8953 VFE has a VBIF block that the vendor software programs
+(vbif-regs and vbif-settings in the vendor msm8953-camera.dtsi).
+Describe the two VBIF regions as optional trailing entries, like
+vfe0_vbif on MSM8939, so existing device trees stay valid.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/1a2d06241fc807e36b1d2893ef5b5cd3098d5bf1
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ .../devicetree/bindings/media/qcom,msm8953-camss.yaml        | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/media/qcom,msm8953-camss.yaml b/Documentation/devicetree/bindings/media/qcom,msm8953-camss.yaml
+index 6d776b0ca711..21944750ee37 100644
+--- a/Documentation/devicetree/bindings/media/qcom,msm8953-camss.yaml
++++ b/Documentation/devicetree/bindings/media/qcom,msm8953-camss.yaml
+@@ -170,9 +170,10 @@ properties:
+ 
+   reg:
+     minItems: 13
+-    maxItems: 13
++    maxItems: 15
+ 
+   reg-names:
++    minItems: 13
+     items:
+       - const: csi_clk_mux
+       - const: csid0
+@@ -187,6 +188,8 @@ properties:
+       - const: ispif
+       - const: vfe0
+       - const: vfe1
++      - const: vfe0_vbif
++      - const: vfe1_vbif
+ 
+   vdda-supply:
+     description:

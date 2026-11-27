@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo-cd-18781y: fix the sensor
+ I2C pins
+
+The sensor I2C bus is on GPIO6/GPIO7, not GPIO14/GPIO15.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/760ee60859306e9fa2117a4b234f3e193b9f9bde
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index 58bc8ca3feb6..dc2fef46271b 100644
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -614,7 +614,7 @@ pmx_mdss_sleep: pmx-mdss-sleep-state {
+ 	};
+ 
+ 	sensor_i2c_default: sensor-i2c-default-state {
+-		pins = "gpio14", "gpio15";
++		pins = "gpio6", "gpio7";
+ 		function = "gpio";
+ 		drive-strength = <2>;
+ 		bias-disable;

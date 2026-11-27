@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 13:02:58 +0100
+Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo-cd-18781y: keep the SDHC2
+ I/O supply on
+
+The stock DT keeps the SDHC2 I/O supply always on
+(qcom,vdd-io-always-on). Mainline has no such option for sdhci-msm, so
+mark L12 regulator-always-on.
+
+When the WLAN card is powered off while idle, sdhci-msm can switch
+vqmmc off with the card. Resuming the card failed with -EBUSY in about
+half of the boots on two units. With L12 fixed at 1.8 V and always on,
+one of those units brought the card up on all 30 warm reboots. Fixed
+voltage without always-on was not tested.
+
+Assisted-by: Claude:claude-opus-5-5
+Assisted-by: Codex:gpt-6.2-astra
+Source: https://github.com/isilweo/linux/commit/09788328e59a8d3d90602598f9a36bc13455faed
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index c9ce485920d3..1905b780bd6a 100644
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -509,6 +509,7 @@ pm8953_l11: l11 {
+ 		pm8953_l12: l12 {
+ 			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1800000>;
++			regulator-always-on;
+ 		};
+ 
+ 		pm8953_l13: l13 {

@@ -1,0 +1,126 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] media: qcom: camss: apply the MSM8953 VFE VBIF setting
+
+Program the VBIF register of each MSM8953 VFE as the vendor software does
+(vbif-regs = <0x124>, vbif-settings = <0x3>). vfe_vbif_apply_settings()
+only knew the MSM8939 values; select them per SoC, with an explicit
+MSM8939 case so a future SoC does not inherit them by default.
+
+The VBIF region is optional in the MSM8953 binding, so on MSM8953 (and
+SDM450, which uses the same resources) map it only when the device tree
+provides it and skip the setting otherwise. On MSM8939 a missing region
+still fails probe as before.
+
+The donor tested the VBIF setting together with the other MSM8953 VFE
+configuration changes, not in isolation.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/2be3d99162fcbe914ca4bcd63cd1ca87b9ae159f
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ .../media/platform/qcom/camss/camss-vfe-4-1.c  |  2 +-
+ .../media/platform/qcom/camss/camss-vfe-vbif.c | 18 ++++++++++++++++--
+ drivers/media/platform/qcom/camss/camss-vfe.c  | 16 +++++++++++-----
+ drivers/media/platform/qcom/camss/camss.c      |  4 ++++
+ 4 files changed, 32 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+index 9cf1ccdb2fe7..a49e30d171fd 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+@@ -746,7 +746,7 @@ static void vfe_set_qos(struct vfe_device *vfe)
+ 	writel_relaxed(val7, vfe->base + VFE_0_BUS_BDG_QOS_CFG_7);
+ 
+ 	/* SoC-specific VBIF settings */
+-	if (vfe->res->has_vbif) {
++	if (vfe->vbif_base) {
+ 		ret = vfe_vbif_apply_settings(vfe);
+ 		if (ret < 0) {
+ 			dev_err_ratelimited(vfe->camss->dev,
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-vbif.c b/drivers/media/platform/qcom/camss/camss-vfe-vbif.c
+index 911f8da02f1f..232c82ddef03 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-vbif.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-vbif.c
+@@ -17,6 +17,10 @@
+ #define VBIF_FIXED_SORT_EN	0x30
+ #define VBIF_FIXED_SORT_SEL0	0x34
+ 
++/* MSM8953: vbif-regs = <0x124>, vbif-settings = <0x3> in the vendor DT */
++#define VBIF_8X53_QOS_CFG	0x124
++#define VBIF_8X53_QOS_CFG_VAL	0x3
++
+ void vfe_vbif_write_reg(struct vfe_device *vfe, u32 reg, u32 val)
+ {
+ 	writel_relaxed(val, vfe->vbif_base + reg);
+@@ -24,8 +28,18 @@ void vfe_vbif_write_reg(struct vfe_device *vfe, u32 reg, u32 val)
+ 
+ int vfe_vbif_apply_settings(struct vfe_device *vfe)
+ {
+-	vfe_vbif_write_reg(vfe, VBIF_FIXED_SORT_EN, 0xfff);
+-	vfe_vbif_write_reg(vfe, VBIF_FIXED_SORT_SEL0, 0x555000);
++	switch (vfe->camss->res->version) {
++	case CAMSS_8x39:
++		vfe_vbif_write_reg(vfe, VBIF_FIXED_SORT_EN, 0xfff);
++		vfe_vbif_write_reg(vfe, VBIF_FIXED_SORT_SEL0, 0x555000);
++		break;
++	case CAMSS_8x53:
++		vfe_vbif_write_reg(vfe, VBIF_8X53_QOS_CFG,
++				   VBIF_8X53_QOS_CFG_VAL);
++		break;
++	default:
++		break;
++	}
+ 
+ 	return 0;
+ }
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
+index 64518915e250..c333439b706c 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe.c
+@@ -1924,11 +1924,17 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
+ 	}
+ 
+ 	if (vfe->res->has_vbif) {
+-		vfe->vbif_base = devm_platform_ioremap_resource_byname(pdev,
+-								       vfe->res->vbif_name);
+-		if (IS_ERR(vfe->vbif_base)) {
+-			dev_err(dev, "could not map vbif memory\n");
+-			return PTR_ERR(vfe->vbif_base);
++		struct resource *vbif;
++
++		vbif = platform_get_resource_byname(pdev, IORESOURCE_MEM,
++						    vfe->res->vbif_name);
++		/* The VBIF region is optional in the MSM8953 binding */
++		if (vbif || camss->res->version != CAMSS_8x53) {
++			vfe->vbif_base = devm_ioremap_resource(dev, vbif);
++			if (IS_ERR(vfe->vbif_base)) {
++				dev_err(dev, "could not map vbif memory\n");
++				return PTR_ERR(vfe->vbif_base);
++			}
+ 		}
+ 	}
+ 
+diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
+index 1e3ffee84fa7..b57108c71ac4 100644
+--- a/drivers/media/platform/qcom/camss/camss.c
++++ b/drivers/media/platform/qcom/camss/camss.c
+@@ -464,6 +464,8 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 			.line_num = 3,
+ 			.has_pd = true,
+ 			.pd_name = "vfe0",
++			.has_vbif = true,
++			.vbif_name = "vfe0_vbif",
+ 			.hw_ops = &vfe_ops_4_1,
+ 			.formats_rdi = &vfe_formats_rdi_8x16,
+ 			.formats_pix = &vfe_formats_pix_8x16
+@@ -490,6 +492,8 @@ static const struct camss_subdev_resources vfe_res_8x53[] = {
+ 			.line_num = 3,
+ 			.has_pd = true,
+ 			.pd_name = "vfe1",
++			.has_vbif = true,
++			.vbif_name = "vfe1_vbif",
+ 			.hw_ops = &vfe_ops_4_1,
+ 			.formats_rdi = &vfe_formats_rdi_8x16,
+ 			.formats_pix = &vfe_formats_pix_8x16

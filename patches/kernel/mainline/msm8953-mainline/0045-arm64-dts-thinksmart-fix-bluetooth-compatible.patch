@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 20:43:15 +0100
+Subject: [PATCH] arm64: dts: qcom: apq8053-lenovo-cd-18781y: fix the Bluetooth
+ compatible
+
+The first compatible of the Bluetooth node, "qcom-qca9379-bt", has a
+hyphen where the vendor prefix ends, so it matches no binding and
+dtbs_check rejects the node. Use "qcom,qca9379-bt". hci_qca binds to the
+"qcom,qca6174-bt" fallback as before.
+
+Fixes: a6afd63b09e0 ("arm64: dts: qcom: msm8953: Add device tree for Lenovo ThinkSmart View")
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/4bd04b8c311f460ac96a2e93ac690c76ad08059a
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+index ffaa60ba653e..94c95cd17fa3 100644
+--- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
++++ b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
+@@ -183,7 +183,7 @@ &uart_5 {
+ 	status = "okay";
+ 
+ 	qca9379_bt: bluetooth {
+-		compatible = "qcom-qca9379-bt", "qcom,qca6174-bt";
++		compatible = "qcom,qca9379-bt", "qcom,qca6174-bt";
+ 		enable-gpios = <&tlmm 76 GPIO_ACTIVE_HIGH>;
+ 		clocks = <&sleep_clk>;
+ 	};

@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Tue, 24 Nov 2026 19:38:36 +0100
+Subject: [PATCH] media: qcom: camss: vfe: use the 2048 word UB on MSM8953
+
+Use 2048 unified buffer words for VFE0 on MSM8953 (VFE40_UB_SIZE_8952 in
+the vendor driver) instead of the 1024 of MSM8916, split into three
+equal parts. Pass the VFE device to get_ub_size() so VFE 4.1 can return
+the size per SoC. This also applies to SDM450.
+
+Some vendor trees use a larger buffer. The donor tested 2048 words
+with the combined MSM8953 VFE configuration, not in isolation.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/df5aa93178913437fdccbcc8123caa44eec5511b
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ drivers/media/platform/qcom/camss/camss-vfe-4-1.c  | 14 ++++++++++----
+ drivers/media/platform/qcom/camss/camss-vfe-4-7.c  |  6 +++---
+ drivers/media/platform/qcom/camss/camss-vfe-4-8.c  |  2 +-
+ drivers/media/platform/qcom/camss/camss-vfe-gen1.c |  2 +-
+ drivers/media/platform/qcom/camss/camss-vfe-gen1.h |  2 +-
+ 5 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+index 6afa8e5deb7a..87ba5cdc3098 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
+@@ -218,13 +218,19 @@
+ 
+ #define MSM_VFE_VFE0_UB_SIZE 1023
+ #define MSM_VFE_VFE0_UB_SIZE_RDI (MSM_VFE_VFE0_UB_SIZE / 3)
++/* MSM8953 VFE0: 2048 UB words split in three, depth encoded as words - 1 */
++#define MSM_VFE_VFE0_UB_WORDS_8X53 2048
++#define MSM_VFE_VFE0_UB_SIZE_RDI_8X53 (MSM_VFE_VFE0_UB_WORDS_8X53 / 3 - 1)
+ 
+-static u16 vfe_get_ub_size(u8 vfe_id)
++static u16 vfe_get_ub_size(struct vfe_device *vfe)
+ {
+-	if (vfe_id == 0)
+-		return MSM_VFE_VFE0_UB_SIZE_RDI;
++	if (vfe->id != 0)
++		return 0;
++
++	if (vfe->camss->res->version == CAMSS_8x53)
++		return MSM_VFE_VFE0_UB_SIZE_RDI_8X53;
+ 
+-	return 0;
++	return MSM_VFE_VFE0_UB_SIZE_RDI;
+ }
+ 
+ static inline void vfe_reg_clr(struct vfe_device *vfe, u32 reg, u32 clr_bits)
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-7.c b/drivers/media/platform/qcom/camss/camss-vfe-4-7.c
+index 76729607db02..2f16173968d2 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-7.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-7.c
+@@ -252,11 +252,11 @@
+ #define MSM_VFE_VFE1_UB_SIZE 1535
+ #define MSM_VFE_VFE1_UB_SIZE_RDI (MSM_VFE_VFE1_UB_SIZE / 3)
+ 
+-static u16 vfe_get_ub_size(u8 vfe_id)
++static u16 vfe_get_ub_size(struct vfe_device *vfe)
+ {
+-	if (vfe_id == 0)
++	if (vfe->id == 0)
+ 		return MSM_VFE_VFE0_UB_SIZE_RDI;
+-	else if (vfe_id == 1)
++	else if (vfe->id == 1)
+ 		return MSM_VFE_VFE1_UB_SIZE_RDI;
+ 
+ 	return 0;
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-8.c b/drivers/media/platform/qcom/camss/camss-vfe-4-8.c
+index b2f7d855d8dd..0887693b98ca 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-4-8.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-4-8.c
+@@ -1009,7 +1009,7 @@ static irqreturn_t vfe_isr(int irq, void *dev)
+ 	return IRQ_HANDLED;
+ }
+ 
+-static u16 vfe_get_ub_size(u8 vfe_id)
++static u16 vfe_get_ub_size(struct vfe_device *vfe)
+ {
+ 	/* On VFE4.8 the ub-size is the same on both instances */
+ 	return MSM_VFE_VFE0_UB_SIZE_RDI;
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-gen1.c b/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
+index d84a375e3318..fe71056a1891 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-gen1.c
+@@ -176,7 +176,7 @@ static int vfe_enable_output(struct vfe_line *line)
+ 	unsigned int i;
+ 	u16 ub_size;
+ 
+-	ub_size = vfe->ops_gen1->get_ub_size(vfe->id);
++	ub_size = vfe->ops_gen1->get_ub_size(vfe);
+ 	if (!ub_size)
+ 		return -EINVAL;
+ 
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-gen1.h b/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
+index 6d5f9656562c..5b9a63504d42 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
++++ b/drivers/media/platform/qcom/camss/camss-vfe-gen1.h
+@@ -28,7 +28,7 @@ struct vfe_hw_ops_gen1 {
+ 				   u8 enable);
+ 	void (*enable_irq_pix_line)(struct vfe_device *vfe, u8 comp, enum vfe_line_id line_id,
+ 				    u8 enable);
+-	u16 (*get_ub_size)(u8 vfe_id);
++	u16 (*get_ub_size)(struct vfe_device *vfe);
+ 	void (*halt_clear)(struct vfe_device *vfe);
+ 	void (*halt_request)(struct vfe_device *vfe);
+ 	void (*set_camif_cfg)(struct vfe_device *vfe, struct vfe_line *line);

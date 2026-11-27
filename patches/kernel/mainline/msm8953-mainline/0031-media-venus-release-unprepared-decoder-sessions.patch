@@ -1,41 +1,38 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Chris Paslawski <chris@paslawski.me>
 Date: Mon, 16 Nov 2026 22:20:51 -0800
-Subject: [PATCH] media: venus: release decoder sessions without prepared buffers
+Subject: [PATCH] media: venus: quiesce capture work and release sessions on close
 
-vdec_queue_setup() initializes a firmware session before any compressed
-input is queued. With DMABUF queues, vb2 does not call buf_init until
-buffer memory is imported, and does not call buf_cleanup for buffers
-that were never prepared.
+Decoder queue setup can open a firmware session before vb2 imports any
+DMABUFs. Closing after REQBUFS or STREAMON without a QBUF then skips
+vdec_buf_cleanup(), leaving a firmware session behind. Repeated empty
+MediaCodec start/stop cycles can exhaust the firmware's session limit.
+Closing a decoder can also race with a firmware release-reference event
+that queues delayed CAPTURE work after cancellation.
 
-Firmware teardown normally runs from vdec_buf_cleanup() when buf_count
-reaches zero. Closing a decoder after REQBUFS, or after STREAMON without
-any QBUF, skips that callback and removes the host instance without
-ending its firmware session. Repeated empty MediaCodec start/stop cycles
-can exhaust firmware sessions and make subsequent REQBUFS fail with EIO
-and HFI_ERR_SYS_MAX_SESSIONS_REACHED.
+Disable and drain delayed CAPTURE work before teardown, so firmware
+callbacks cannot queue it again. Release a remaining firmware session
+if there are no prepared buffers; otherwise let m2m context release
+run the normal buffer cleanup. Use the same session-release helper in
+both paths so an empty started session also stops, unloads its resources
+and frees its internal buffers.
 
-Release a remaining firmware session on close when no prepared buffers
-are left. Reuse the normal session-release helper so an empty started
-session also stops, unloads its resources and frees internal buffers.
-Prepared buffers retain their existing teardown through the m2m context
-release; an uninitialized or already released session is not released
-again.
-
-Source: local device integration, not an upstream backport.
-Base: msm8953-mainline/linux 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429,
-with this device's preceding kernel patches applied.
+Origin: Local ThinkSmart View integration
+Source: https://github.com/isilweo/linux/commit/d57feaf4fe518acdcb2de9eb30a4e8363b7edfec
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
 ---
- drivers/media/platform/qcom/venus/vdec.c | 5 +++++
- 1 file changed, 5 insertions(+)
+ drivers/media/platform/qcom/venus/vdec.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/platform/qcom/venus/vdec.c b/drivers/media/platform/qcom/venus/vdec.c
 --- a/drivers/media/platform/qcom/venus/vdec.c
 +++ b/drivers/media/platform/qcom/venus/vdec.c
-@@ -1921,6 +1921,11 @@ static int vdec_close(struct file *file)
+@@ -1921,6 +1921,12 @@ static int vdec_close(struct file *file)
  	vdec_pm_get(inst);
  	vdec_eos_cancel(inst);
- 	cancel_work_sync(&inst->delayed_process_work);
+-	cancel_work_sync(&inst->delayed_process_work);
++	/* Firmware callbacks during teardown must not queue the work again. */
++	disable_work_sync(&inst->delayed_process_work);
 +
 +	/* Unprepared DMABUF buffers never reach vdec_buf_cleanup(). */
 +	if (!inst->buf_count && inst->state != INST_UNINIT)

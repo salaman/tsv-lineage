@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lech Piekarski <isilweo@gmail.com>
+Date: Wed, 25 Nov 2026 20:34:23 +0100
+Subject: [PATCH] ASoC: qcom: q6asm-dai: check the capture buffer queueing in
+ prepare
+
+For capture, q6asm_dai_prepare() queues the read buffers right after
+sending the encoder configuration, before checking whether that
+command succeeded, and ignores the result of q6asm_read(). A stream
+whose configuration was rejected thus gets read commands, and a stream
+that could queue only some of its buffers is reported as prepared.
+
+Queue the buffers only once the configuration has succeeded, and undo
+the setup if a buffer cannot be queued.
+
+Fixes: 2a9e92d371db ("ASoC: qdsp6: q6asm: Add q6asm dai driver")
+Cc: stable@vger.kernel.org
+Assisted-by: Codex:gpt-6.2-astra
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/cfc38d4c15795bbf541c1988f07dca1d11cf2c7a
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ sound/soc/qcom/qdsp6/q6asm-dai.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+index 841853a541db..24b750967cf2 100644
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -329,17 +329,24 @@ static int q6asm_dai_prepare(struct snd_soc_component *component,
+ 							   runtime->rate,
+ 							   runtime->channels,
+ 							   prtd->bits_per_sample);
+-
+-		/* Queue the buffers */
+-		for (i = 0; i < runtime->periods; i++)
+-			q6asm_read(prtd->audio_client, prtd->stream_id);
+-
+ 	}
+ 	if (ret < 0) {
+ 		dev_err(dev, "%s: CMD Format block failed\n", __func__);
+ 		goto err;
+ 	}
+ 
++	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
++		/* Queue the buffers */
++		for (i = 0; i < runtime->periods; i++) {
++			ret = q6asm_read(prtd->audio_client, prtd->stream_id);
++			if (ret < 0) {
++				dev_err(dev, "%s: queuing capture buffer %d failed: %d\n",
++					__func__, i, ret);
++				goto err;
++			}
++		}
++	}
++
+ 	prtd->state = Q6ASM_STREAM_RUNNING;
+ 	return 0;
+ 
