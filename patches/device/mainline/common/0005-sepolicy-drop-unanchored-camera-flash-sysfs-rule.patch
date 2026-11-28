@@ -1,0 +1,23 @@
+From: ThinkSmart LineageOS 24 project (tsv-dev)
+Subject: [PATCH] sepolicy: drop the unanchored camera flash /sys rule
+
+The rule /sys/devices/.*/leds/...:(flash|torch) can match anywhere below
+/sys/devices, so selabel_partial_match() never lets the ueventd cold boot
+restorecon of /sys skip a subtree: every one of ~44k sysfs entries is
+walked and looked up. On the ThinkSmart View (no flash LED) that is most of
+the 8.3 s cold boot that init waits for.
+
+--- a/sepolicy/vendor/file_contexts
++++ b/sepolicy/vendor/file_contexts
+@@ -30,8 +30,9 @@
+ # HDMI CEC
+ /dev/cec[0-9]+		u:object_r:cec_device:s0
+ 
+-# LEDs
+-/sys/devices/.*/leds/[^/]*:(flash|torch)[^/]*(/.*)?	u:object_r:vendor_sysfs_camera_flash:s0
++# LEDs: no /sys/devices/.* rule here. Any /sys rule with a leading .* makes the cold boot
++# restorecon of /sys walk and regex-match every file in /sys/devices (seconds on msm8953).
++# Devices with a camera flash LED should label it with genfscon or an anchored path.
+ 
+ # Rfkill
+ /dev/rfkill		u:object_r:rfkill_device:s0
