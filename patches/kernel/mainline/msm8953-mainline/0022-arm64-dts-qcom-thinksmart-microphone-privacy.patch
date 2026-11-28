@@ -3,21 +3,19 @@ From: Chris Paslawski <chris@paslawski.me>
 Date: Sat, 7 Nov 2026 20:24:09 -0800
 Subject: [PATCH] arm64: dts: qcom: thinksmart: report hardware microphone mute
 
-Android consumes SW_MUTE_DEVICE to update audio mute and physical
-microphone sensor privacy. SW_MICROPHONE_INSERT describes a connected
-microphone instead and does not activate this integration.
+Report the hardware microphone switch as SW_MUTE_DEVICE so Android
+updates audio mute and microphone sensor privacy. SW_MICROPHONE_INSERT
+reports whether a microphone is connected, not whether it is muted.
 
-GPIO86 is high with the slider in its upper, muted position and low with
-the microphones live. Use active-high polarity so switch state one means
-muted. The slider already silences both microphone channels in hardware.
-Remove the obsolete comment claiming that this switch cannot be modelled.
+The slider silences both microphone channels in hardware and drives
+GPIO86 high while muted. Use active-high polarity so switch state one
+means muted, and name the node mic-mute-switch.
 
 Origin: Local ThinkSmart View Android integration
-Source: https://github.com/msm8953-mainline/linux
+Source: https://github.com/msm8953-mainline/linux/commit/755ffc44d5d8442adeec8bbaa02108478089c4d7
+Source: https://github.com/isilweo/linux/commit/7f743421f0c6b42e38de8bb4ae9761aed02e3166
 Reference: https://github.com/jethac/lenovo-thinksmart-view/blob/fe9c0a58a1a2b7c4893f2ff76ff5c0b90206d458/devices/privacy-switches/ANALYSIS.md
-Base-commit: 755ffc44d5d8442adeec8bbaa02108478089c4d7
-Apply in filename order within this project.
-
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
 ---
 diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
 --- a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts
@@ -31,7 +29,8 @@ diff --git a/arch/arm64/boot/dts/qcom/apq8053-lenovo-cd-18781y.dts b/arch/arm64/
 -		 * switch. It is a hardware mute switch though, so mics will be muted
 -		 * even though it is not reflected in UI.
 -		 */
- 		mic-mute-swtich {
+-		mic-mute-swtich {
++		mic-mute-switch {
  			label = "Mic Mute";
 -			gpios = <&tlmm 86 GPIO_ACTIVE_LOW>;
 +			gpios = <&tlmm 86 GPIO_ACTIVE_HIGH>;

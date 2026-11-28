@@ -26,12 +26,12 @@ Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
  drivers/media/platform/qcom/camss/camss-vfe-4-1.c  | 22 ++++++++++++++++++++++
  drivers/media/platform/qcom/camss/camss-vfe-gen1.c |  9 +++++++++
  drivers/media/platform/qcom/camss/camss-vfe-gen1.h |  2 ++
- drivers/media/platform/qcom/camss/camss-vfe.c      | 21 +++++++++------------
+ drivers/media/platform/qcom/camss/camss-vfe.c      |  5 ++++-
  drivers/media/platform/qcom/camss/camss-vfe.h      |  7 +++++++
  drivers/media/platform/qcom/camss/camss-video.c    |  5 ++---
  drivers/media/platform/qcom/camss/camss-video.h    |  3 +++
  drivers/media/platform/qcom/camss/camss.c          |  2 ++
- 8 files changed, 56 insertions(+), 15 deletions(-)
+ 8 files changed, 51 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/media/platform/qcom/camss/camss-vfe-4-1.c b/drivers/media/platform/qcom/camss/camss-vfe-4-1.c
 index 87ba5cdc3098a739a1fc567f6bb665cba165ee69..ba4346423d74bc56f92a67db143246c26753d850 100644
@@ -121,7 +121,7 @@ index 5b9a63504d420363f8bcda45f3ee814ff6dbe794..f6db0fc8f119635b6489d57634dd0bd1
  			      u8 plane, u32 enable);
  	void (*wm_set_ub_cfg)(struct vfe_device *vfe, u8 wm, u16 offset, u16 depth);
 diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
-index a8c6d5c80c33369fb0b6ebccb6cdfd7da6155f0c..6d5936f83a21c7d2601f380c943725050ce7ee74 100644
+index a8c6d5c80c33369fb0b6ebccb6cdfd7da6155f0c..acfce96481acae06a61f2c3bbcf9d1fc63831d37 100644
 --- a/drivers/media/platform/qcom/camss/camss-vfe.c
 +++ b/drivers/media/platform/qcom/camss/camss-vfe.c
 @@ -1444,7 +1444,9 @@ static void vfe_try_format(struct vfe_line *line,
@@ -135,30 +135,7 @@ index a8c6d5c80c33369fb0b6ebccb6cdfd7da6155f0c..6d5936f83a21c7d2601f380c94372505
  
  		fmt->field = V4L2_FIELD_NONE;
  		fmt->colorspace = V4L2_COLORSPACE_SRGB;
-@@ -1925,17 +1927,11 @@ int msm_vfe_subdev_init(struct camss *camss, struct vfe_device *vfe,
- 	}
- 
- 	if (vfe->res->has_vbif) {
--		struct resource *vbif;
--
--		vbif = platform_get_resource_byname(pdev, IORESOURCE_MEM,
--						    vfe->res->vbif_name);
--		/* The VBIF region is optional in the MSM8953 binding */
--		if (vbif || camss->res->version != CAMSS_8x53) {
--			vfe->vbif_base = devm_ioremap_resource(dev, vbif);
--			if (IS_ERR(vfe->vbif_base)) {
--				dev_err(dev, "could not map vbif memory\n");
--				return PTR_ERR(vfe->vbif_base);
--			}
-+		vfe->vbif_base = devm_platform_ioremap_resource_byname(pdev,
-+								       vfe->res->vbif_name);
-+		if (IS_ERR(vfe->vbif_base)) {
-+			dev_err(dev, "could not map vbif memory\n");
-+			return PTR_ERR(vfe->vbif_base);
- 		}
- 	}
- 
-@@ -2211,6 +2207,7 @@ int msm_vfe_register_entities(struct vfe_device *vfe,
+@@ -2211,6 +2213,7 @@ int msm_vfe_register_entities(struct vfe_device *vfe,
  		} else {
  			video_out->bpl_alignment = vfe_bpl_align_rdi(vfe);
  			video_out->line_based = 0;

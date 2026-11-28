@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: isilweo <isilweo@gmail.com>
+Date: Fri, 27 Nov 2026 18:52:47 +0100
+Subject: [PATCH] drm/msm/a5xx: add a progress callback for hang detection
+
+The MSM hangcheck treats outstanding work with an unchanged completion
+fence as a lockup when the driver cannot report progress. An A5xx
+submission can take longer than the hangcheck period while the command
+processor is still working. On the ThinkSmart View's Adreno 506 this
+caused resets during unthrottled offscreen rendering.
+
+Compare the command processor's IB1 and IB2 base addresses and remaining
+sizes with the previous sample on the same ring, following A6xx. A5xx
+does not expose the prefetched counts, but detecting movement does not
+require an exact position. Use the existing bounded hangcheck retries;
+hardware fault and recovery handling are unchanged.
+
+Assisted-by: Claude:claude-opus-5-5
+Source: https://github.com/isilweo/linux/commit/acd4c7d8017b3f3c2b57f3c76b29044459fa43f7
+Base-commit: 1c1a919fd728c881e7ccaf3cf18a3cf3055e0429
+---
+ drivers/gpu/drm/msm/adreno/a5xx_gpu.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+index 5d96b8f63156..537e89539366 100644
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1776,6 +1776,28 @@ static struct msm_gpu *a5xx_gpu_init(struct drm_device *dev)
+ 	return gpu;
+ }
+ 
++static bool a5xx_progress(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
++{
++	struct msm_cp_state cp_state = {
++		.ib1_base = gpu_read64(gpu, REG_A5XX_CP_IB1_BASE),
++		.ib2_base = gpu_read64(gpu, REG_A5XX_CP_IB2_BASE),
++		.ib1_rem  = gpu_read(gpu, REG_A5XX_CP_IB1_BUFSZ),
++		.ib2_rem  = gpu_read(gpu, REG_A5XX_CP_IB2_BUFSZ),
++	};
++	bool progress;
++
++	/*
++	 * Like a6xx_progress(): we only want to know whether the CP moved
++	 * since the last check, not where exactly it is, so the prefetch
++	 * that BUFSZ does not account for does not matter here.
++	 */
++	progress = !!memcmp(&cp_state, &ring->last_cp_state, sizeof(cp_state));
++
++	ring->last_cp_state = cp_state;
++
++	return progress;
++}
++
+ const struct adreno_gpu_funcs a5xx_gpu_funcs = {
+ 	.base = {
+ 		.get_param = adreno_get_param,
+@@ -1800,6 +1822,7 @@ const struct adreno_gpu_funcs a5xx_gpu_funcs = {
+ 		.gpu_state_put = a5xx_gpu_state_put,
+ 		.create_vm = adreno_create_vm,
+ 		.get_rptr = a5xx_get_rptr,
++		.progress = a5xx_progress,
+ 	},
+ 	.init = a5xx_gpu_init,
+ 	.get_timestamp = a5xx_get_timestamp,
