@@ -1,0 +1,32 @@
+From: ThinkSmart LineageOS 24 project (tsv-dev)
+Subject: [PATCH] drm/msm/a5xx: disable ring preemption on A506
+
+Under a 4 h TsvBench soak (120 rounds, Night Light toggled every round)
+the A506 hit "CP | opcode error | possible opcode=0x00000000" followed by
+"hangcheck detected gpu lockup rb 2" (recovered by the kernel).
+Mesa puts normal contexts on ring 2 (prio 6 of 12) and SurfaceFlinger's
+high-priority RenderEngine context on ring 0, so the GPU preempts on
+nearly every composition. All four 2024 a5xx preemption fixes are
+already in this tree. Run the A506 on one ring, like the A510.
+
+Same 4 h soak with this patch: 0 lockups (was 1), and with Night Light on
+(all frames GPU-composited) missed vsyncs per 15 s scene dropped from
+18.6-21.7 to 0.3-1.2 in list/anim/canvas. No scene got worse.
+
+
+--- a/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a5xx_gpu.c
+@@ -1746,7 +1746,12 @@
+ 
+ 	nr_rings = 4;
+ 
+-	if (config->info->revn == 510)
++	/*
++	 * A506 (msm8953) locks up with a CP opcode error after ring
++	 * preemption under sustained load, even with the 2024 preemption
++	 * fixes. Run it with a single ring like the A510.
++	 */
++	if (config->info->revn == 510 || config->info->revn == 506)
+ 		nr_rings = 1;
+ 
+ 	ret = adreno_gpu_init(dev, pdev, adreno_gpu, config->info->funcs, nr_rings);
