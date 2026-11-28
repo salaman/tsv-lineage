@@ -95,6 +95,7 @@ PRODUCT_SYSTEM_PROPERTIES += \
 PRODUCT_VENDOR_PROPERTIES += \
     ro.hardware.camera=libcamera \
     ro.vendor.qcom.soc.enable_modem_services=0 \
+    vendor.hwc.drm.ctm=DRM_OR_IGNORE \
     vendor.powerhal.disp.idle_support=0 \
     vendor.powerhal.interaction.min=1000 \
     vendor.powerhal.interaction.max=2000 \
