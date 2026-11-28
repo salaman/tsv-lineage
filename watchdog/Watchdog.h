@@ -19,6 +19,14 @@ struct HungRing {
 
 constexpr auto kMaxReportGap = std::chrono::seconds(3);
 
+constexpr bool IsRecentKernelLog(std::chrono::nanoseconds timestamp,
+                                 std::chrono::nanoseconds now) {
+    // logd's kernel-to-realtime conversion can put a live record slightly ahead of the clock.
+    constexpr auto kMaxFutureSkew = std::chrono::milliseconds(250);
+    const auto age = now - timestamp;
+    return age >= -kMaxFutureSkew && age <= kMaxReportGap;
+}
+
 // Accept only complete DRM hangcheck reports from this device's Adreno 506.
 class HangcheckReader {
 public:

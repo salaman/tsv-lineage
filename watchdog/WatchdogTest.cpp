@@ -12,6 +12,14 @@ using namespace std::chrono_literals;
 constexpr Watchdog::Clock::time_point kStart{};
 constexpr std::string_view kPrefix = "[drm:hangcheck_handler [msm]] *ERROR* 05000600: ";
 
+TEST(KernelLogTimestampTest, AcceptsLiveClockSkewWithoutAcceptingStaleReports) {
+    constexpr auto now = 1700000000s;
+    EXPECT_TRUE(IsRecentKernelLog(now + 9ms, now));
+    EXPECT_TRUE(IsRecentKernelLog(now - 2s, now));
+    EXPECT_FALSE(IsRecentKernelLog(now - 3001ms, now));
+    EXPECT_FALSE(IsRecentKernelLog(now + 1s, now));
+}
+
 TEST(HangcheckReaderTest, ReadsRealReportAndRejectsMissingOrInvalidFences) {
     HangcheckReader reader;
     const auto read = [&](std::string_view line, auto when) {

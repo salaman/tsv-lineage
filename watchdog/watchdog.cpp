@@ -41,10 +41,8 @@ std::string_view HangcheckMessage(log_msg& record, int bytes) {
 
 bool IsRecent(const log_msg& record) {
     using namespace std::chrono;
-    const auto now = system_clock::now().time_since_epoch();
-    const auto timestamp = nanoseconds(record.nsec());
-    // The log buffer uses realtime; use it only to reject stale queued reports.
-    return timestamp <= now && now - timestamp <= thinksmart::kMaxReportGap;
+    return thinksmart::IsRecentKernelLog(nanoseconds(record.nsec()),
+                                        system_clock::now().time_since_epoch());
 }
 
 bool StoreRebootGuard(int dir, const std::string& reason) {
